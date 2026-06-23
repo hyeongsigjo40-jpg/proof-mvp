@@ -7,6 +7,10 @@ create table if not exists public.profiles (
   failure_picture text,
   action_code jsonb,
   feedback_loop text,
+  kakao_linked boolean not null default false,
+  kakao_access_token text,
+  kakao_refresh_token text,
+  checkin_time time not null default '21:00',
   onboarded_at timestamptz not null default now()
 );
 
@@ -23,7 +27,7 @@ create table if not exists public.check_ins (
   id text primary key,
   plan_id text not null references public.daily_plans(id) on delete cascade,
   user_id uuid not null references auth.users(id) on delete cascade,
-  result text not null check (result in ('done', 'partial', 'not_done')),
+  result text not null check (result in ('done', 'partial', 'not_done', 'no_response')),
   context_text text,
   created_at timestamptz not null default now()
 );

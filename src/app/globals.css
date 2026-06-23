@@ -251,6 +251,11 @@ textarea:focus {
   padding-top: 18px;
 }
 
+.flow-section {
+  display: grid;
+  gap: 16px;
+}
+
 .section-heading {
   display: grid;
   gap: 6px;
@@ -409,6 +414,24 @@ textarea:focus {
   margin-top: 20px;
 }
 
+.count-row {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-top: 18px;
+}
+
+.count-row span {
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 750;
+  padding: 10px;
+  text-align: center;
+}
+
 .record-item {
   align-items: start;
   background: rgba(255, 255, 255, 0.86);
@@ -450,8 +473,13 @@ blockquote {
   color: var(--partial);
 }
 
-.status-chip.not_done,
+.status-chip.no_response,
 .status-chip.pending {
+  background: rgba(109, 116, 107, 0.13);
+  color: var(--muted);
+}
+
+.status-chip.not_done {
   background: rgba(154, 75, 69, 0.12);
   color: var(--danger);
 }
@@ -499,6 +527,7 @@ blockquote {
 
   .segmented-options,
   .result-grid,
+  .count-row,
   .record-item {
     grid-template-columns: 1fr;
   }

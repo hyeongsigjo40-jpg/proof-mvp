@@ -26,7 +26,7 @@ export default function OnboardingPage() {
 
   useEffect(() => {
     if (!loading && profile) {
-      router.replace("/plan");
+      router.replace("/evening");
     }
   }, [loading, profile, router]);
 
@@ -110,7 +110,7 @@ export default function OnboardingPage() {
         ...baseInput,
         ...synthesis,
       });
-      router.push("/plan");
+      router.push("/settings");
     } catch (caught) {
       setFormError(caught instanceof Error ? caught.message : "저장하지 못했어요.");
     } finally {
@@ -246,7 +246,7 @@ export default function OnboardingPage() {
         ) : null}
 
         <button className="primary-button" disabled={pending || !synthesis} type="submit">
-          {pending && synthesis ? "저장하는 중" : "저장하고 계획하기"}
+          {pending && synthesis ? "저장하는 중" : "저장하고 알림 설정하기"}
         </button>
       </form>
     </main>

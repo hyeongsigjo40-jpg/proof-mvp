@@ -2,7 +2,7 @@
 
 import { generatePatternSummary } from "@/lib/patterns";
 import { hasSupabaseConfig, supabase } from "@/lib/supabase";
-import { todayKey } from "@/lib/date";
+import { todayKey, tomorrowKey } from "@/lib/date";
 import type { CheckIn, CheckInResult, DailyPlan, PatternInsight, Profile, RecordItem } from "@/types/proof";
 
 const DEMO_USER_ID = "demo-user";
@@ -23,11 +23,14 @@ type OnboardingInput = {
   failure_picture?: string | null;
   action_code?: string[] | null;
   feedback_loop?: string | null;
+  kakao_linked?: boolean;
+  checkin_time?: string;
 };
 
 type PlanInput = {
   plan_text: string;
   minimum_plan_text?: string;
+  date?: string;
 };
 
 type CheckInInput = {
@@ -104,7 +107,13 @@ export async function getProfile(userId: string) {
     return readLocalState().profile;
   }
 
-  const { data, error } = await supabase.from("profiles").select("*").eq("id", userId).maybeSingle();
+  const { data, error } = await supabase
+    .from("profiles")
+    .select(
+      "id, habit_name, usual_breakdown_context, usual_breakdown_behavior, goal_picture, failure_picture, action_code, feedback_loop, kakao_linked, checkin_time, onboarded_at",
+    )
+    .eq("id", userId)
+    .maybeSingle();
   if (error) {
     throw error;
   }
@@ -121,6 +130,8 @@ export async function saveProfile(userId: string, input: OnboardingInput) {
     failure_picture: input.failure_picture ?? null,
     action_code: input.action_code ?? null,
     feedback_loop: input.feedback_loop ?? null,
+    kakao_linked: input.kakao_linked ?? false,
+    checkin_time: input.checkin_time ?? "21:00",
     onboarded_at: new Date().toISOString(),
   };
 
@@ -130,7 +141,13 @@ export async function saveProfile(userId: string, input: OnboardingInput) {
     return profile;
   }
 
-  const { data, error } = await supabase.from("profiles").upsert(profile).select("*").single();
+  const { data, error } = await supabase
+    .from("profiles")
+    .upsert(profile)
+    .select(
+      "id, habit_name, usual_breakdown_context, usual_breakdown_behavior, goal_picture, failure_picture, action_code, feedback_loop, kakao_linked, checkin_time, onboarded_at",
+    )
+    .single();
   if (error) {
     throw error;
   }
@@ -157,8 +174,14 @@ export async function getLatestInsight(userId: string) {
 }
 
 export async function getTodayPlan(userId: string) {
-  const date = todayKey();
+  return getPlanForDate(userId, todayKey());
+}
 
+export async function getTomorrowPlan(userId: string) {
+  return getPlanForDate(userId, tomorrowKey());
+}
+
+export async function getPlanForDate(userId: string, date: string) {
   if (!hasSupabaseConfig || !supabase) {
     return (
       readLocalState()
@@ -183,10 +206,11 @@ export async function getTodayPlan(userId: string) {
 }
 
 export async function savePlan(userId: string, input: PlanInput) {
+  const date = input.date ?? todayKey();
   const plan: DailyPlan = {
     id: createId("plan"),
     user_id: userId,
-    date: todayKey(),
+    date,
     plan_text: input.plan_text,
     minimum_plan_text: input.minimum_plan_text?.trim() || null,
     created_at: new Date().toISOString(),
@@ -194,9 +218,14 @@ export async function savePlan(userId: string, input: PlanInput) {
 
   if (!hasSupabaseConfig || !supabase) {
     const state = readLocalState();
-    writeLocalState({ ...state, plans: [...state.plans, plan] });
+    writeLocalState({
+      ...state,
+      plans: [...state.plans.filter((item) => !(item.user_id === userId && item.date === date)), plan],
+    });
     return plan;
   }
+
+  await supabase.from("daily_plans").delete().eq("user_id", userId).eq("date", date);
 
   const { data, error } = await supabase.from("daily_plans").insert(plan).select("*").single();
   if (error) {
@@ -259,6 +288,8 @@ export async function saveCheckIn(userId: string, input: CheckInInput) {
 }
 
 export async function getRecords(userId: string) {
+  await ensureNoResponseForPastPlans(userId);
+
   if (!hasSupabaseConfig || !supabase) {
     const state = readLocalState();
     return state.plans
@@ -288,6 +319,114 @@ export async function getRecords(userId: string) {
       check_in: checkIns[0] ?? null,
     };
   }) as RecordItem[];
+}
+
+export async function updateCheckInTime(userId: string, checkinTime: string) {
+  if (!hasSupabaseConfig || !supabase) {
+    const state = readLocalState();
+    if (!state.profile) {
+      return null;
+    }
+    const profile = { ...state.profile, checkin_time: checkinTime };
+    writeLocalState({ ...state, profile });
+    return profile;
+  }
+
+  const { data, error } = await supabase
+    .from("profiles")
+    .update({ checkin_time: checkinTime })
+    .eq("id", userId)
+    .select(
+      "id, habit_name, usual_breakdown_context, usual_breakdown_behavior, goal_picture, failure_picture, action_code, feedback_loop, kakao_linked, checkin_time, onboarded_at",
+    )
+    .single();
+
+  if (error) {
+    throw error;
+  }
+  return data as Profile;
+}
+
+export async function ensureNoResponseForPastPlans(userId: string) {
+  const today = todayKey();
+
+  if (!hasSupabaseConfig || !supabase) {
+    const state = readLocalState();
+    const missing = state.plans.filter(
+      (plan) =>
+        plan.user_id === userId &&
+        plan.date < today &&
+        !state.checkIns.some((checkIn) => checkIn.plan_id === plan.id),
+    );
+
+    if (missing.length === 0) {
+      return;
+    }
+
+    writeLocalState({
+      ...state,
+      checkIns: [
+        ...state.checkIns,
+        ...missing.map((plan) => ({
+          id: createId("check"),
+          user_id: userId,
+          plan_id: plan.id,
+          result: "no_response" as const,
+          context_text: null,
+          created_at: new Date().toISOString(),
+        })),
+      ],
+    });
+    return;
+  }
+
+  const { data: plans, error } = await supabase
+    .from("daily_plans")
+    .select("id")
+    .eq("user_id", userId)
+    .lt("date", today);
+
+  if (error) {
+    throw error;
+  }
+
+  if (!plans?.length) {
+    return;
+  }
+
+  const { data: checkIns, error: checkInError } = await supabase
+    .from("check_ins")
+    .select("plan_id")
+    .eq("user_id", userId)
+    .in(
+      "plan_id",
+      plans.map((plan) => plan.id),
+    );
+
+  if (checkInError) {
+    throw checkInError;
+  }
+
+  const checkedPlanIds = new Set((checkIns ?? []).map((checkIn) => checkIn.plan_id));
+  const missingRows = plans
+    .filter((plan) => !checkedPlanIds.has(plan.id))
+    .map((plan) => ({
+      id: createId("check"),
+      user_id: userId,
+      plan_id: plan.id,
+      result: "no_response",
+      context_text: null,
+      created_at: new Date().toISOString(),
+    }));
+
+  if (missingRows.length === 0) {
+    return;
+  }
+
+  const { error: insertError } = await supabase.from("check_ins").insert(missingRows);
+  if (insertError) {
+    throw insertError;
+  }
 }
 
 function createInsightIfReady(userId: string, checkIns: CheckIn[], insights: PatternInsight[]) {

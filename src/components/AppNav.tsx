@@ -2,12 +2,12 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { CalendarCheck, ClipboardList, ListChecks } from "lucide-react";
+import { Bell, CalendarCheck, ListChecks } from "lucide-react";
 
 const items = [
-  { href: "/plan", label: "계획", icon: ClipboardList },
-  { href: "/check-in", label: "체크인", icon: CalendarCheck },
+  { href: "/evening", label: "회고", icon: CalendarCheck },
   { href: "/record", label: "기록", icon: ListChecks },
+  { href: "/settings", label: "설정", icon: Bell },
 ];
 
 export function AppNav() {

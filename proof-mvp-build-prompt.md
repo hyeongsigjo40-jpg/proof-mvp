@@ -40,23 +40,26 @@ Layer 2 (피드백 — 1의 결과가 다시 0의 진단을 갱신)
 
 ### Layer 1 — 핵심 루프 (매일 반복되는 기능, 이번 MVP의 본체)
 
-세 가지 기능을 하나의 흐름으로 묶는다:
+세 가지 기능을 하나의 "저녁 회고" 흐름으로 묶는다:
 
-**A1. 사전 if-then 계획 (전날 밤)**
-- 매일 저녁 알림 → "내일 [언제], [어디서], 정확히 [무엇을] 할지" 한 문장 입력
+**A1. 사전 if-then 계획 (저녁 회고 안에서)**
+- 매일 저녁 기본 21:00 알림 → 체크인 후 "내일 [언제], [어디서], 정확히 [무엇을] 할지" 한 문장 입력
+- 설정에서 시간 선택 UI로 회고 시간을 바꿀 수 있음
 - 자유 텍스트 한 줄로 충분 (예: "저녁 8시, 책상에서, 토익 RC 10문제")
-- 입력 안 하면 다음날 체크인에서 "어제 계획을 안 세웠어요" 정도로만 가볍게 알려줄 것
+- 입력 안 하면 다음 저녁 회고에서 "확인할 계획이 없어요" 정도로만 가볍게 알려줄 것
   (죄책감 유발 카피 금지 — 아래 디자인 제약 참조)
 
-**A9. 외부 체크인**
-- 계획한 시점 기준 ±몇 시간 뒤, 1회 알림: "계획한 거 하셨어요?" → Yes / No / 일부만
+**A9. 저녁 체크인**
+- 매일 설정된 시간에 1회 알림: "계획한 거 하셨어요?" → Yes / No / 일부만
 - No 또는 일부만 선택 시, 추가 질문 절대 캐묻지 말고 단 1개만:
   "그 순간 뭘 하고 있었어요?" (자유 텍스트, 선택 가능 — 건너뛰기 허용)
+- 응답 없이 다음날로 넘어간 계획은 실패로 임의 판정하지 않고 no_response로 구분
 - 평가성 질문 금지 (아래 디자인 제약 참조)
 
 **A3. 트랙레코드**
 - 캘린더/리스트 형태로 지금까지의 Yes/No/일부 기록을 누적해서 보여줌
 - "이번 주 N번 중 M번 했음" 같은 단순 누적 수치만, 점수화·등급화·배지 없음
+- partial은 완료 카운트에 포함하고, done / partial / no_response / not_done 네 상태를 구분 표시
 - 무너진 날 다시 시작할 때 이 화면을 먼저 보여줘서 "이미 해온 것"을 환기
 
 ### Layer 2 — 피드백 (메커니즘 진단 갱신)
@@ -94,6 +97,10 @@ User
   - habit_name (string)
   - usual_breakdown_context (string)
   - usual_breakdown_behavior (string)
+  - kakao_linked (bool, default false)
+  - kakao_access_token (string, nullable)
+  - kakao_refresh_token (string, nullable)
+  - checkin_time (time, default '21:00')
 
 DailyPlan
   - id, user_id, date
@@ -102,7 +109,7 @@ DailyPlan
 
 CheckIn
   - id, plan_id
-  - result (enum: done / not_done / partial)
+  - result (enum: done / not_done / partial / no_response)
   - context_text (nullable, "그 순간 뭘 하고 있었어요" 답변)
   - created_at
 
@@ -117,15 +124,16 @@ PatternInsight (Layer2 산출물)
 ## 화면 (MVP 최소 구성, 4개면 충분)
 
 1. **온보딩** — Layer0 입력 3개 받기 (1페이지)
-2. **오늘의 계획** — A1 입력 (전날 밤 알림에서 진입), PatternInsight 있으면 상단에 짧게 노출
-3. **체크인** — A9 (Yes/No/일부 + 선택적 1문장)
-4. **트랙레코드** — A3 (캘린더 또는 리스트, 단순 누적 수치)
+2. **저녁 회고** — 오늘 체크인 → PatternInsight → 내일 계획 입력
+3. **트랙레코드** — A3 (캘린더 또는 리스트, 단순 누적 수치)
+4. **설정** — 회고 시간 선택, 카카오 나에게 보내기 연결
 
 ---
 
 ## 기술 스택 제안 (MVP, 빠르게 만들 것이 목적)
 
-- 웹앱 우선 (모바일 알림 대신 초기엔 이메일/웹푸시로 대체 가능)
+- 웹앱 우선
+- 알림은 카카오 "나에게 보내기" API 우선, 미연동 사용자는 웹푸시 폴백
 - 프론트: 단순 React 또는 동급 경량 프레임워크
 - 백엔드: 가벼운 API + SQLite/Postgres 중 택1
 - AI/NLP는 MVP 단계에서 불필요 — PatternInsight는 단순 키워드 빈도 집계로 시작

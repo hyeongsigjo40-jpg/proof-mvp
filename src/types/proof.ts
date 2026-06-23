@@ -4,7 +4,7 @@ export type BreakdownContext =
   | "마감 직전"
   | "기타";
 
-export type CheckInResult = "done" | "partial" | "not_done";
+export type CheckInResult = "done" | "partial" | "not_done" | "no_response";
 
 export type Profile = {
   id: string;
@@ -15,6 +15,8 @@ export type Profile = {
   failure_picture: string | null;
   action_code: string[] | null;
   feedback_loop: string | null;
+  kakao_linked: boolean;
+  checkin_time: string;
   onboarded_at: string;
 };
 

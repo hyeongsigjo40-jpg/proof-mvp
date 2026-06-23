@@ -5,6 +5,12 @@ export function todayKey(date = new Date()) {
   return `${year}-${month}-${day}`;
 }
 
+export function tomorrowKey(date = new Date()) {
+  const tomorrow = new Date(date);
+  tomorrow.setDate(date.getDate() + 1);
+  return todayKey(tomorrow);
+}
+
 export function formatDate(dateKey: string) {
   return new Intl.DateTimeFormat("ko-KR", {
     month: "long",

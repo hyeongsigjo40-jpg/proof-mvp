@@ -19,15 +19,30 @@ NEXT_PUBLIC_SUPABASE_URL=...
 NEXT_PUBLIC_SUPABASE_ANON_KEY=...
 OPENAI_API_KEY=...
 OPENAI_MODEL=gpt-5.4-mini
+SUPABASE_SERVICE_ROLE_KEY=...
+KAKAO_REST_API_KEY=...
+KAKAO_CLIENT_SECRET=...
+KAKAO_REDIRECT_URI=http://localhost:3000/api/kakao/callback
+APP_URL=http://localhost:3000
+CRON_SECRET=...
 ```
 
 3. Supabase Auth에서 Email OTP/Magic Link를 활성화합니다.
 4. 기존 `profiles` 테이블을 이미 만들었다면 `supabase-coach-migration.sql`도 실행합니다.
+5. 카카오 디벨로퍼스에서 Redirect URI에 `APP_URL/api/kakao/callback`을 등록하고, 동의항목에서 카카오톡 메시지 전송 권한을 활성화합니다.
 
 ## 화면
 
 - `/onboarding`: Layer 0 입력 3개
 - `/onboarding`: GPT 구체 질문과 행동 강령 생성
-- `/plan`: A1 한 줄 계획
-- `/check-in`: A9 체크인
-- `/record`: A3 트랙레코드
+- `/evening`: 오늘 체크인 → 패턴 인사이트 → 내일 계획
+- `/record`: A3 트랙레코드, done/partial/no_response/not_done 구분
+- `/settings`: 저녁 회고 시간과 카카오 나에게 보내기 연결
+
+## 카카오 알림
+
+- 카카오 OAuth 연결: `/api/kakao/login`
+- 카카오 콜백: `/api/kakao/callback`
+- 서버 알림 호출: `POST /api/notifications/kakao`
+
+`POST /api/notifications/kakao`는 현재 한국 시간 기준 `checkin_time`이 일치하고 `kakao_linked=true`인 사용자에게 카카오 "나에게 보내기" 메시지를 보냅니다. Vercel Cron 등에서 주기적으로 호출하도록 연결하면 됩니다.

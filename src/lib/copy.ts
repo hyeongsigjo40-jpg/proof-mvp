@@ -8,6 +8,7 @@ export const copy = {
   breakdownContextLabel: "보통 무너지는 시간대나 상황",
   breakdownBehaviorLabel: "그때 주로 하는 행동",
   breakdownBehaviorPlaceholder: "예: 숏폼 보다가 시간 다 씀",
+  eveningTitle: "오늘을 확인하고 내일을 정합니다.",
   planTitle: "내일은 언제, 어디서, 무엇을 해볼까요?",
   planPlaceholder: "예: 저녁 8시, 책상에서, 토익 RC 10문제",
   minimumPlanLabel: "최소 버전",
@@ -17,6 +18,7 @@ export const copy = {
   contextPlaceholder: "예: 침대에서 숏폼을 보고 있었어요",
   missedPlan: "아직 계획이 없어요. 한 줄만 정해볼까요?",
   recordTitle: "지금까지의 기록",
+  settingsTitle: "알림 설정",
   emptyRecord: "기록이 쌓이면 여기에 보입니다.",
   patternLead: "최근 기록에서는",
   patternTail: "이 자주 보여요. 오늘은 그 시간대를 어떻게 다르게 보낼까요?",
@@ -28,4 +30,5 @@ export const resultLabels = {
   done: "했어요",
   partial: "일부만 했어요",
   not_done: "하지 않았어요",
+  no_response: "응답 없음",
 };

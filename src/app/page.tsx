@@ -29,8 +29,8 @@ export default function Home() {
       {!userId ? <AuthPanel /> : null}
 
       {userId ? (
-        <Link className="primary-button wide-button" href={profile ? "/plan" : "/onboarding"}>
-          {profile ? "오늘의 계획으로" : "세 가지 입력하기"}
+        <Link className="primary-button wide-button" href={profile ? "/evening" : "/onboarding"}>
+          {profile ? "저녁 회고로" : "세 가지 입력하기"}
           <ArrowRight size={18} aria-hidden="true" />
         </Link>
       ) : null}
