@@ -88,6 +88,7 @@ export default function Home() {
   const [step, setStep] = useState<OnboardingStep>("habit");
   const [data, setData] = useState<OnboardingData>(emptyOnboarding);
   const [records, setRecords] = useState<DailyRecord[]>(createMonthRecords([]));
+  const [checkIns, setCheckIns] = useState<ElasticCheckIn[]>([]);
   const [messages, setMessages] = useState<Message[]>(initialMessages);
   const [input, setInput] = useState("");
   const [selectedCheckIn, setSelectedCheckIn] = useState<CheckInStatus | null>(null);
@@ -117,6 +118,7 @@ export default function Home() {
         ]);
       }
 
+      setCheckIns(checkIns);
       setRecords(createMonthRecords(checkIns));
       setMiniFailureCount(countRecentMiniFailures(checkIns));
       const today = checkIns.find((checkIn) => checkIn.checkin_date === todayKey());
@@ -252,13 +254,16 @@ export default function Home() {
       self_narrative_detected: hasSelfNarrative,
     });
     applySavedCheckIn(saved);
+    const nextCheckIns = upsertCheckIn(checkIns, saved);
+    setCheckIns(nextCheckIns);
+    const contextualReply = await createContextualReply("checkin_saved", data, nextCheckIns);
     setMessages((current) => [
       ...current,
       { role: "user", text: createDailyNote(selectedCheckIn, memo) },
       ...(hasSelfNarrative
         ? [{ role: "assistant" as const, text: "기억하시죠, 오늘은 그 사람인지가 아니라 이 행동을 했는지만 보기로 했었죠" }]
         : []),
-      { role: "assistant", text: "오늘 기록을 저장했어요. 이제 내일의 세 단계는 그대로 둘지 조정할지 확인해볼게요." },
+      { role: "assistant", text: contextualReply },
     ]);
     setMiniFailureCount((current) => (selectedCheckIn === "not_done" ? current + 1 : 0));
     setSaveMessage("체크인을 Supabase에 저장했어요.");
@@ -272,20 +277,23 @@ export default function Home() {
       elite_task: nextElite || data.eliteTask,
     };
     await updateElasticTasks(userId, nextTasks);
-    setData((current) => ({
-      ...current,
+    const nextData = {
+      ...data,
       miniTask: nextTasks.mini_task,
       plusTask: nextTasks.plus_task,
       eliteTask: nextTasks.elite_task,
-    }));
-    assistant("내일 계획을 Supabase에 저장했어요. Mini는 계속 가장 쉽게 시작할 수 있는 단위로 유지합니다.");
+    };
+    setData(nextData);
+    assistant(await createContextualReply("plan_saved", nextData, checkIns));
   }
 
   async function markNoResponse() {
     if (!userId) return;
     const saved = await saveElasticCheckIn({ user_id: userId, result: "no_response" });
     applySavedCheckIn(saved);
-    assistant("응답 없음으로 구분해 저장했어요. 시스템이 임의로 하지 않음으로 판정하지 않습니다.");
+    const nextCheckIns = upsertCheckIn(checkIns, saved);
+    setCheckIns(nextCheckIns);
+    assistant(await createContextualReply("no_response_saved", data, nextCheckIns));
   }
 
   async function persistProfile(nextData: OnboardingData) {
@@ -641,6 +649,54 @@ function mapProfileToData(profile: ElasticProfile): OnboardingData {
     eliteTask: profile.elite_task,
     monthlyVision: profile.monthly_vision,
   };
+}
+
+function upsertCheckIn(checkIns: ElasticCheckIn[], saved: ElasticCheckIn) {
+  return [...checkIns.filter((checkIn) => checkIn.checkin_date !== saved.checkin_date), saved].sort((a, b) =>
+    a.checkin_date.localeCompare(b.checkin_date),
+  );
+}
+
+async function createContextualReply(
+  event: "checkin_saved" | "plan_saved" | "no_response_saved",
+  data: OnboardingData,
+  checkIns: ElasticCheckIn[],
+) {
+  try {
+    const response = await fetch("/api/elastic/contextual-reply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        event,
+        today: todayKey(),
+        timezone: "Asia/Seoul",
+        profile: {
+          habit_name: data.habitName,
+          mini_task: data.miniTask,
+          plus_task: data.plusTask,
+          elite_task: data.eliteTask,
+          monthly_vision: data.monthlyVision,
+        },
+        recent_checkins: checkIns.slice(-10).map((checkIn) => ({
+          checkin_date: checkIn.checkin_date,
+          result: checkIn.result,
+          memo: checkIn.memo,
+        })),
+      }),
+    });
+
+    if (!response.ok) throw new Error("Failed");
+    const body = (await response.json()) as { reply: string };
+    return body.reply;
+  } catch {
+    if (event === "no_response_saved") {
+      return `${todayKey()} 기록은 응답 없음으로 저장했어요. 하지 않음으로 임의 판정하지 않습니다.`;
+    }
+    if (event === "plan_saved") {
+      return `${todayKey()} 기준으로 내일의 Mini/Plus/Elite 계획을 저장했어요.`;
+    }
+    return `${todayKey()} 체크인을 저장했어요. 최근 기록을 기준으로 다음 체크인을 이어갑니다.`;
+  }
 }
 
 function createMonthRecords(checkIns: ElasticCheckIn[]): DailyRecord[] {
