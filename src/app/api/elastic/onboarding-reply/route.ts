@@ -9,6 +9,7 @@ type OnboardingStep =
   | "feeling"
   | "behavior"
   | "recovery"
+  | "elastic_intro"
   | "mini"
   | "plus"
   | "elite"
@@ -57,6 +58,7 @@ const stepOrder: OnboardingStep[] = [
   "feeling",
   "behavior",
   "recovery",
+  "elastic_intro",
   "mini",
   "plus",
   "elite",
@@ -167,7 +169,9 @@ function stepGoal(step: OnboardingStep) {
     case "behavior":
       return "그때 실제로 한 행동을 관찰 가능한 표현으로 파악한다.";
     case "recovery":
-      return "다시 시작할 때 이미 쓰는 회복 방법을 파악한다.";
+      return "다시 시작할 때 이미 쓰는 회복 방법을 파악한다. 답변이 나오면 next_step을 elastic_intro로 설정하고 reply는 짧은 수락 문장(1문장)만 쓴다.";
+    case "elastic_intro":
+      return "이 단계는 UI에서 버튼으로 처리되므로 직접 호출되지 않는다.";
     case "mini":
       return "Mini 최소 단위를 정한다.";
     case "plus":
@@ -211,11 +215,7 @@ function fallbackTurn(body: OnboardingControllerRequest): OnboardingControllerRe
     case "behavior":
       return advance("behavior", { actualBreakdownBehavior: text }, "그 다음엔 보통 어떻게 다시 시작해요?");
     case "recovery":
-      return advance(
-        "recovery",
-        { recoveryMethod: text },
-        `${compactHabitName(body.data.habitName || "") || "이 습관"}을 세 단계로 나눠볼게요. Mini, 즉 최소 단위는 무엇으로 할까요?`,
-      );
+      return advance("recovery", { recoveryMethod: text }, "알겠어요, 저장했어요.");
     case "mini":
       return advance("mini", { miniTask: text }, "좋아요. Plus, 즉 보통 단위는 무엇으로 할까요?");
     case "plus":

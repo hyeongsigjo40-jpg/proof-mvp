@@ -27,6 +27,7 @@ type OnboardingStep =
   | "feeling"
   | "behavior"
   | "recovery"
+  | "elastic_intro"
   | "mini"
   | "plus"
   | "elite"
@@ -107,6 +108,19 @@ const statusMeta = {
   no_response: { label: "무응답", icon: Minus },
   open: { label: "열림", icon: PencilLine },
 };
+
+const ELASTIC_HABIT_EXPLANATION = `Elastic Habit은 하루 상태에 따라 목표 수준을 유연하게 바꿀 수 있는 습관 방식이에요.
+
+일반적인 습관 앱은 '했다/못했다' 이분법이라 한번 못하면 자책이 생기고, 자책이 쌓이면 포기로 이어지죠. Elastic Habit은 달라요.
+
+Mini, Plus, Elite 세 단계를 미리 정해두면 이렇게 됩니다.
+• 피곤하거나 바쁜 날 → Mini만 해도 '완료'
+• 보통 날 → Plus
+• 에너지가 넘치는 날 → Elite까지
+
+어떤 날도 실패가 없고, 작은 기록이 매일 이어져요. 습관이 끊기지 않는 이유가 바로 여기 있습니다.
+
+아래 버튼을 누르면 세 단계를 직접 설정합니다.`;
 
 const initialMessages: Message[] = [];
 const DEBUG_SESSION_KEY = "proof-elastic-debug-session";
@@ -233,12 +247,17 @@ export default function Home() {
     setPending(false);
   }
 
-  async function continueAfterTransition() {
-    setPending(true);
-    const turn = await runOnboardingController("transition", "", data);
-    recordDebugEvent("transition", "[continue]", turn);
-    await applyOnboardingResult(turn.final);
-    setPending(false);
+  async function handleContinueButton() {
+    if (step === "transition") {
+      setPending(true);
+      const turn = await runOnboardingController("transition", "", data);
+      recordDebugEvent("transition", "[continue]", turn);
+      await applyOnboardingResult(turn.final);
+      setPending(false);
+    } else if (step === "elastic_intro") {
+      setStep("mini");
+      assistant(`${data.habitName || "이 습관"}의 Mini부터 정해볼게요. Mini는 피곤하거나 바쁜 날에도 할 수 있는 가장 작은 행동이에요. 어떻게 설정할까요?`);
+    }
   }
 
   function recordDebugEvent(stepBefore: OnboardingStep, input: string, turn: OnboardingTurnResult) {
@@ -266,6 +285,9 @@ export default function Home() {
     if (!result.should_advance) return;
 
     setStep(result.next_step);
+    if (result.next_step === "elastic_intro") {
+      assistant(ELASTIC_HABIT_EXPLANATION);
+    }
     if (result.next_step === "complete") {
       setNextMini(nextData.miniTask);
       setNextPlus(nextData.plusTask);
@@ -572,7 +594,7 @@ export default function Home() {
                 step={step}
                 pending={pending}
                 onSubmit={handleTextSubmit}
-                onContinue={continueAfterTransition}
+                onContinue={handleContinueButton}
               />
             ) : (
               <DailyCheckIn
@@ -698,10 +720,11 @@ function OnboardingComposer({
     event.currentTarget.form?.requestSubmit();
   }
 
-  if (step === "transition") {
+  if (step === "transition" || step === "elastic_intro") {
+    const label = step === "transition" ? "최근 실패 구체화로" : "Mini / Plus / Elite 설정하기";
     return (
       <button className="primary-button" disabled={pending} onClick={onContinue} type="button">
-        {pending ? "GPT가 다음 질문을 준비하는 중" : "최근 실패 구체화로"}
+        {pending ? "GPT가 다음 질문을 준비하는 중" : label}
       </button>
     );
   }
@@ -893,11 +916,7 @@ function fallbackOnboardingTurn(
     case "behavior":
       return advanceOnboardingStep(currentStep, { actualBreakdownBehavior: text }, "그 다음엔 보통 어떻게 다시 시작해요?");
     case "recovery":
-      return advanceOnboardingStep(
-        currentStep,
-        { recoveryMethod: text },
-        `${compactHabitName(data.habitName) || "이 습관"}을 세 단계로 나눠볼게요. Mini, 즉 최소 단위는 무엇으로 할까요?`,
-      );
+      return advanceOnboardingStep(currentStep, { recoveryMethod: text }, "알겠어요, 저장했어요.");
     case "mini":
       return advanceOnboardingStep(currentStep, { miniTask: text }, "좋아요. Plus, 즉 보통 단위는 무엇으로 할까요?");
     case "plus":
@@ -970,6 +989,7 @@ function getNextOnboardingStep(currentStep: OnboardingStep): OnboardingStep {
     "feeling",
     "behavior",
     "recovery",
+    "elastic_intro",
     "mini",
     "plus",
     "elite",
