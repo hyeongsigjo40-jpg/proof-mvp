@@ -296,9 +296,10 @@ export default function Home() {
 
   async function advanceOnboarding(text: string) {
     setPending(true);
-    const turn = await runOnboardingController(step, text, data);
+    const currentData = { ...data };
+    const turn = await runOnboardingController(step, text, currentData);
     recordDebugEvent(step, text, turn);
-    await applyOnboardingResult(turn.final);
+    await applyOnboardingResult(turn.final, currentData);
     setPending(false);
   }
 
@@ -311,9 +312,10 @@ export default function Home() {
       setPending(false);
     } else if (step === "transition") {
       setPending(true);
-      const turn = await runOnboardingController("transition", "", data);
+      const currentData = { ...data };
+      const turn = await runOnboardingController("transition", "", currentData);
       recordDebugEvent("transition", "[continue]", turn);
-      await applyOnboardingResult(turn.final);
+      await applyOnboardingResult(turn.final, currentData);
       setPending(false);
     } else if (step === "elastic_intro") {
       setStep("mini");
@@ -338,8 +340,8 @@ export default function Home() {
     );
   }
 
-  async function applyOnboardingResult(result: OnboardingControllerResult) {
-    const nextData = applyOnboardingPatch(data, result.data_patch);
+  async function applyOnboardingResult(result: OnboardingControllerResult, baseData = data) {
+    const nextData = applyOnboardingPatch(baseData, result.data_patch);
     setData(nextData);
     assistant(result.reply);
 
@@ -435,9 +437,9 @@ export default function Home() {
     await saveElasticProfile({
       user_id: userId,
       scope: storageScope,
-      life_area: goalData.lifeArea || null,
-      why_change: goalData.whyChange || null,
-      identity_statement: goalData.identityStatement || null,
+      life_area: nextData.lifeArea || null,
+      why_change: nextData.whyChange || null,
+      identity_statement: nextData.goalIdentityStatement || null,
       habit_name: nextData.habitName,
       identity_motive: nextData.identityMotive,
       motive_summary: nextData.motiveSummary,
