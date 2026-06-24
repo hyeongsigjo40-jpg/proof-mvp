@@ -346,6 +346,20 @@ export default function Home() {
     if (!result.should_advance) return;
 
     setStep(result.next_step);
+
+    if (result.next_step === "motive" && nextData.whyChange) {
+      const motiveTurn = await runOnboardingController("motive", nextData.whyChange, nextData);
+      const motiveResult = motiveTurn.final;
+      const afterMotive = applyOnboardingPatch(nextData, motiveResult.data_patch);
+      setData(afterMotive);
+      assistant(motiveResult.reply);
+      if (motiveResult.should_advance) {
+        setStep(motiveResult.next_step);
+        if (motiveResult.next_step === "elastic_intro") assistant(ELASTIC_HABIT_EXPLANATION);
+      }
+      return;
+    }
+
     if (result.next_step === "elastic_intro") {
       assistant(ELASTIC_HABIT_EXPLANATION);
     }
@@ -472,7 +486,7 @@ export default function Home() {
     setGoalData({ lifeArea: "[스킵]", whyChange: "[스킵]", identityStatement: "[스킵]" });
     setStep("habit");
     setPending(true);
-    const opening = await runOnboardingController("habit", "", emptyOnboarding);
+    const opening = await runOnboardingController("habit", "", data);
     assistant(opening.final.reply);
     setPending(false);
   }
