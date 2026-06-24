@@ -3,6 +3,7 @@ export type ElasticCheckInStatus = ElasticLevel | "not_done" | "no_response";
 
 export type ElasticProfile = {
   user_id: string;
+  scope?: string;
   habit_name: string;
   identity_motive: string;
   motive_summary: string | null;
@@ -21,6 +22,7 @@ export type ElasticProfile = {
 export type ElasticCheckIn = {
   id: string;
   user_id: string;
+  scope?: string;
   checkin_date: string;
   result: ElasticCheckInStatus;
   memo: string | null;

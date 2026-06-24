@@ -1170,6 +1170,35 @@ blockquote {
   font-size: 12px;
 }
 
+.debug-meta {
+  color: #b9c4be;
+  display: grid;
+  gap: 3px;
+  overflow-wrap: anywhere;
+}
+
+.debug-actions {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: 1fr;
+}
+
+.debug-actions button {
+  background: #20332b;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
+  color: #e6f0ea;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 800;
+  min-height: 30px;
+}
+
+.debug-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .debug-panel details {
   border-top: 1px solid rgba(255, 255, 255, 0.12);
   padding-top: 7px;

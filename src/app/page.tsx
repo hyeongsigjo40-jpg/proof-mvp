@@ -6,8 +6,10 @@ import { AuthPanel } from "@/components/AuthPanel";
 import { LoadingState } from "@/components/LoadingState";
 import { todayKey } from "@/lib/date";
 import {
+  deleteElasticScope,
   getElasticCheckIns,
   getElasticProfile,
+  LIVE_ELASTIC_SCOPE,
   saveElasticCheckIn,
   saveElasticProfile,
   updateElasticTasks,
@@ -107,6 +109,20 @@ const statusMeta = {
 };
 
 const initialMessages: Message[] = [];
+const DEBUG_SESSION_KEY = "proof-elastic-debug-session";
+
+function createDebugSessionId() {
+  return crypto.randomUUID();
+}
+
+function readDebugSessionId() {
+  if (typeof window === "undefined") return "";
+  const current = window.localStorage.getItem(DEBUG_SESSION_KEY);
+  if (current) return current;
+  const next = createDebugSessionId();
+  window.localStorage.setItem(DEBUG_SESSION_KEY, next);
+  return next;
+}
 
 export default function Home() {
   const { loading, userId, error } = useProofSession();
@@ -125,15 +141,22 @@ export default function Home() {
   const [miniFailureCount, setMiniFailureCount] = useState(0);
   const [pending, setPending] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
-  const [debugEnabled, setDebugEnabled] = useState(false);
+  const [debugEnabled] = useState(
+    () => typeof window !== "undefined" && new URLSearchParams(window.location.search).get("debug") === "1",
+  );
+  const [debugSessionId, setDebugSessionId] = useState(() => (debugEnabled ? readDebugSessionId() : ""));
   const [debugEvents, setDebugEvents] = useState<OnboardingDebugEvent[]>([]);
   const chatLogRef = useRef<HTMLDivElement | null>(null);
+  const storageScope = debugEnabled ? `debug:${debugSessionId}` : LIVE_ELASTIC_SCOPE;
 
   useEffect(() => {
     async function load() {
       if (!userId) return;
 
-      const [profile, checkIns] = await Promise.all([getElasticProfile(userId), getElasticCheckIns(userId)]);
+      const [profile, checkIns] = await Promise.all([
+        getElasticProfile(userId, storageScope),
+        getElasticCheckIns(userId, storageScope),
+      ]);
       if (profile?.onboarding_completed_at) {
         const nextData = mapProfileToData(profile);
         setData(nextData);
@@ -146,6 +169,7 @@ export default function Home() {
           { role: "assistant", text: "오늘 체크인을 남겨주세요. 결과는 왼쪽 Elastic Habit Tracker에 저장됩니다." },
         ]);
       } else {
+        resetOnboardingState();
         setPending(true);
         const opening = await runOnboardingController("habit", "", emptyOnboarding);
         assistant(opening.final.reply);
@@ -163,11 +187,7 @@ export default function Home() {
     }
 
     void load();
-  }, [userId]);
-
-  useEffect(() => {
-    setDebugEnabled(new URLSearchParams(window.location.search).get("debug") === "1");
-  }, []);
+  }, [userId, storageScope]);
 
   useEffect(() => {
     const chatLog = chatLogRef.current;
@@ -265,6 +285,7 @@ export default function Home() {
     const hasSelfNarrative = selfNarrativeKeywords.some((keyword) => memo.includes(keyword));
     const saved = await saveElasticCheckIn({
       user_id: userId,
+      scope: storageScope,
       result: selectedCheckIn,
       memo,
       self_narrative_detected: hasSelfNarrative,
@@ -292,7 +313,7 @@ export default function Home() {
       plus_task: nextPlus || data.plusTask,
       elite_task: nextElite || data.eliteTask,
     };
-    await updateElasticTasks(userId, nextTasks);
+    await updateElasticTasks(userId, nextTasks, storageScope);
     const nextData = {
       ...data,
       miniTask: nextTasks.mini_task,
@@ -305,7 +326,7 @@ export default function Home() {
 
   async function markNoResponse() {
     if (!userId) return;
-    const saved = await saveElasticCheckIn({ user_id: userId, result: "no_response" });
+    const saved = await saveElasticCheckIn({ user_id: userId, scope: storageScope, result: "no_response" });
     applySavedCheckIn(saved);
     const nextCheckIns = upsertCheckIn(checkIns, saved);
     setCheckIns(nextCheckIns);
@@ -316,6 +337,7 @@ export default function Home() {
     if (!userId) return;
     await saveElasticProfile({
       user_id: userId,
+      scope: storageScope,
       habit_name: nextData.habitName,
       identity_motive: nextData.identityMotive,
       motive_summary: nextData.motiveSummary,
@@ -329,6 +351,48 @@ export default function Home() {
       monthly_vision: nextData.monthlyVision,
       onboarding_completed_at: new Date().toISOString(),
     });
+  }
+
+  function resetOnboardingState() {
+    setMode("onboarding");
+    setStep("habit");
+    setData(emptyOnboarding);
+    setRecords(createMonthRecords([]));
+    setCheckIns([]);
+    setMessages([]);
+    setInput("");
+    setSelectedCheckIn(null);
+    setMemo("");
+    setNextMini("");
+    setNextPlus("");
+    setNextElite("");
+    setMiniFailureCount(0);
+    setSaveMessage(null);
+  }
+
+  async function resetDebugConversation() {
+    resetOnboardingState();
+    setDebugEvents([]);
+    setPending(true);
+    const opening = await runOnboardingController("habit", "", emptyOnboarding);
+    assistant(opening.final.reply);
+    setPending(false);
+  }
+
+  async function resetCurrentDebugSession() {
+    if (!userId || !debugEnabled) return;
+    setPending(true);
+    await deleteElasticScope(userId, storageScope);
+    await resetDebugConversation();
+    setPending(false);
+  }
+
+  function startNewDebugSession() {
+    if (!debugEnabled) return;
+    const next = createDebugSessionId();
+    window.localStorage.setItem(DEBUG_SESSION_KEY, next);
+    setDebugSessionId(next);
+    setDebugEvents([]);
   }
 
   function applySavedCheckIn(checkIn: ElasticCheckIn) {
@@ -529,7 +593,18 @@ export default function Home() {
               />
             )}
 
-            {debugEnabled ? <OnboardingDebugPanel events={debugEvents} step={step} /> : null}
+            {debugEnabled ? (
+              <OnboardingDebugPanel
+                events={debugEvents}
+                onNewSession={startNewDebugSession}
+                onResetConversation={resetDebugConversation}
+                onResetSession={resetCurrentDebugSession}
+                pending={pending}
+                scope={storageScope}
+                sessionId={debugSessionId}
+                step={step}
+              />
+            ) : null}
           </>
         )}
       </aside>
@@ -537,10 +612,43 @@ export default function Home() {
   );
 }
 
-function OnboardingDebugPanel({ events, step }: { events: OnboardingDebugEvent[]; step: OnboardingStep }) {
+function OnboardingDebugPanel({
+  events,
+  onNewSession,
+  onResetConversation,
+  onResetSession,
+  pending,
+  scope,
+  sessionId,
+  step,
+}: {
+  events: OnboardingDebugEvent[];
+  onNewSession: () => void;
+  onResetConversation: () => void;
+  onResetSession: () => void;
+  pending: boolean;
+  scope: string;
+  sessionId: string;
+  step: OnboardingStep;
+}) {
   return (
     <section className="debug-panel" aria-label="온보딩 디버그">
       <strong>Debug: {step}</strong>
+      <div className="debug-meta">
+        <span>scope: {scope}</span>
+        <span>session: {sessionId.slice(0, 8)}</span>
+      </div>
+      <div className="debug-actions">
+        <button disabled={pending} onClick={onResetConversation} type="button">
+          대화만 초기화
+        </button>
+        <button disabled={pending} onClick={onResetSession} type="button">
+          현재 세션 초기화
+        </button>
+        <button disabled={pending} onClick={onNewSession} type="button">
+          새 디버그 세션
+        </button>
+      </div>
       {events.length ? (
         events.map((event) => (
           <details key={event.id}>
