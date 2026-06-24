@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUp, CalendarCheck, Check, Circle, Flame, MessageCircle, Minus, PencilLine, Target } from "lucide-react";
 import { AuthPanel } from "@/components/AuthPanel";
 import { LoadingState } from "@/components/LoadingState";
@@ -50,6 +50,32 @@ type OnboardingData = {
   monthlyVision: string;
 };
 
+type OnboardingControllerResult = {
+  intent: "answer" | "question" | "correction" | "unclear" | "continue";
+  should_advance: boolean;
+  next_step: OnboardingStep;
+  data_patch: {
+    field: keyof OnboardingData;
+    value: string;
+  }[];
+  reply: string;
+};
+
+type OnboardingTurnResult = {
+  final: OnboardingControllerResult;
+  raw?: OnboardingControllerResult;
+  source: "api" | "fallback";
+};
+
+type OnboardingDebugEvent = {
+  id: string;
+  input: string;
+  stepBefore: OnboardingStep;
+  raw?: OnboardingControllerResult;
+  final: OnboardingControllerResult;
+  source: "api" | "fallback";
+};
+
 type DailyRecord = {
   day: number;
   status: CheckInStatus;
@@ -80,7 +106,7 @@ const statusMeta = {
   open: { label: "열림", icon: PencilLine },
 };
 
-const initialMessages: Message[] = [{ role: "assistant", text: "지금 이루고 싶은 습관이 뭔가요?" }];
+const initialMessages: Message[] = [];
 
 export default function Home() {
   const { loading, userId, error } = useProofSession();
@@ -99,6 +125,9 @@ export default function Home() {
   const [miniFailureCount, setMiniFailureCount] = useState(0);
   const [pending, setPending] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
+  const [debugEnabled, setDebugEnabled] = useState(false);
+  const [debugEvents, setDebugEvents] = useState<OnboardingDebugEvent[]>([]);
+  const chatLogRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     async function load() {
@@ -116,6 +145,11 @@ export default function Home() {
         setMessages([
           { role: "assistant", text: "오늘 체크인을 남겨주세요. 결과는 왼쪽 Elastic Habit Tracker에 저장됩니다." },
         ]);
+      } else {
+        setPending(true);
+        const opening = await runOnboardingController("habit", "", emptyOnboarding);
+        assistant(opening.final.reply);
+        setPending(false);
       }
 
       setCheckIns(checkIns);
@@ -130,6 +164,19 @@ export default function Home() {
 
     void load();
   }, [userId]);
+
+  useEffect(() => {
+    setDebugEnabled(new URLSearchParams(window.location.search).get("debug") === "1");
+  }, []);
+
+  useEffect(() => {
+    const chatLog = chatLogRef.current;
+    if (!chatLog) return;
+
+    requestAnimationFrame(() => {
+      chatLog.scrollTo({ top: chatLog.scrollHeight, behavior: "smooth" });
+    });
+  }, [messages]);
 
   const levelCounts = useMemo(
     () => ({
@@ -159,88 +206,53 @@ export default function Home() {
   }
 
   async function advanceOnboarding(text: string) {
-    if (step === "habit") {
-      setData((current) => ({ ...current, habitName: text }));
-      assistant("이걸 왜 만들고 싶으세요?");
-      setStep("motive");
-      return;
-    }
-
-    if (step === "motive") {
-      setPending(true);
-      const motiveSummary = await summarizeMotive(text);
-      setData((current) => ({ ...current, identityMotive: text, motiveSummary }));
-      assistant(createTransitionText(motiveSummary));
-      setStep("transition");
-      setPending(false);
-      return;
-    }
-
-    if (step === "failure_date") {
-      setData((current) => ({ ...current, recentFailureDate: text }));
-      assistant("무너지기 직전, 기분이 어땠어요?");
-      setStep("feeling");
-      return;
-    }
-
-    if (step === "feeling") {
-      setData((current) => ({ ...current, preBreakdownFeeling: text }));
-      assistant("그때 실제로 뭘 했어요?");
-      setStep("behavior");
-      return;
-    }
-
-    if (step === "behavior") {
-      setData((current) => ({ ...current, actualBreakdownBehavior: text }));
-      assistant("그 다음엔 보통 어떻게 다시 시작해요?");
-      setStep("recovery");
-      return;
-    }
-
-    if (step === "recovery") {
-      setData((current) => ({ ...current, recoveryMethod: text }));
-      assistant(`${data.habitName || "이 습관"}을 세 단계로 나눠볼게요. Mini, 즉 최소 단위는 무엇으로 할까요?`);
-      setStep("mini");
-      return;
-    }
-
-    if (step === "mini") {
-      setData((current) => ({ ...current, miniTask: text }));
-      assistant("Plus, 즉 보통 단위는 무엇으로 할까요?");
-      setStep("plus");
-      return;
-    }
-
-    if (step === "plus") {
-      setData((current) => ({ ...current, plusTask: text }));
-      assistant("Elite, 즉 도전 단위는 무엇으로 할까요?");
-      setStep("elite");
-      return;
-    }
-
-    if (step === "elite") {
-      setData((current) => ({ ...current, eliteTask: text }));
-      assistant("이게 잘 되면, 한 달 뒤 뭐가 달라져 있을까요? 구체적이고 관찰 가능한 장면으로 적어주세요.");
-      setStep("vision");
-      return;
-    }
-
-    if (step === "vision") {
-      const next = { ...data, monthlyVision: text };
-      setData(next);
-      setNextMini(next.miniTask);
-      setNextPlus(next.plusTask);
-      setNextElite(next.eliteTask);
-      await persistProfile(next);
-      assistant("저장했어요. 이제 일상 화면에는 한 달 뒤의 관찰 가능한 변화와 Mini/Plus/Elite만 두고 볼게요.");
-      setStep("complete");
-      setMode("daily");
-    }
+    setPending(true);
+    const turn = await runOnboardingController(step, text, data);
+    recordDebugEvent(step, text, turn);
+    await applyOnboardingResult(turn.final);
+    setPending(false);
   }
 
-  function continueAfterTransition() {
-    assistant("최근에 못 지킨 날이 언제였어요?");
-    setStep("failure_date");
+  async function continueAfterTransition() {
+    setPending(true);
+    const turn = await runOnboardingController("transition", "", data);
+    recordDebugEvent("transition", "[continue]", turn);
+    await applyOnboardingResult(turn.final);
+    setPending(false);
+  }
+
+  function recordDebugEvent(stepBefore: OnboardingStep, input: string, turn: OnboardingTurnResult) {
+    if (!debugEnabled) return;
+    setDebugEvents((current) =>
+      [
+        {
+          id: `${Date.now()}-${current.length}`,
+          input,
+          stepBefore,
+          raw: turn.raw,
+          final: turn.final,
+          source: turn.source,
+        },
+        ...current,
+      ].slice(0, 6),
+    );
+  }
+
+  async function applyOnboardingResult(result: OnboardingControllerResult) {
+    const nextData = applyOnboardingPatch(data, result.data_patch);
+    setData(nextData);
+    assistant(result.reply);
+
+    if (!result.should_advance) return;
+
+    setStep(result.next_step);
+    if (result.next_step === "complete") {
+      setNextMini(nextData.miniTask);
+      setNextPlus(nextData.plusTask);
+      setNextElite(nextData.eliteTask);
+      await persistProfile(nextData);
+      setMode("daily");
+    }
   }
 
   function handleCheckIn(status: Exclude<CheckInStatus, "open" | "no_response">) {
@@ -467,11 +479,11 @@ export default function Home() {
           <MessageCircle size={18} aria-hidden="true" />
           <div>
             <strong>{mode === "onboarding" ? "Proof Onboarding" : "Daily Check-in"}</strong>
-            <span>{mode === "onboarding" ? "고정 5단계 시나리오" : "Supabase 저장 연결됨"}</span>
+            <span>{mode === "onboarding" ? "GPT 진행형 온보딩" : "Supabase 저장 연결됨"}</span>
           </div>
         </div>
 
-        {error ? <p className="error-text">{error}</p> : null}
+        {userId && error ? <p className="error-text">{error}</p> : null}
 
         {!userId ? (
           <div className="daily-panel">
@@ -479,7 +491,7 @@ export default function Home() {
           </div>
         ) : (
           <>
-            <div className="chat-log">
+            <div className="chat-log" ref={chatLogRef}>
               {messages.map((message, index) => (
                 <div className={`chat-bubble ${message.role}`} key={`${message.role}-${index}`}>
                   {message.text}
@@ -516,10 +528,33 @@ export default function Home() {
                 onSavePlan={saveNextPlan}
               />
             )}
+
+            {debugEnabled ? <OnboardingDebugPanel events={debugEvents} step={step} /> : null}
           </>
         )}
       </aside>
     </main>
+  );
+}
+
+function OnboardingDebugPanel({ events, step }: { events: OnboardingDebugEvent[]; step: OnboardingStep }) {
+  return (
+    <section className="debug-panel" aria-label="온보딩 디버그">
+      <strong>Debug: {step}</strong>
+      {events.length ? (
+        events.map((event) => (
+          <details key={event.id}>
+            <summary>
+              {event.source} / {event.stepBefore} {"->"} {event.final.next_step} / advance{" "}
+              {event.final.should_advance ? "true" : "false"}
+            </summary>
+            <pre>{JSON.stringify({ input: event.input, raw: event.raw, final: event.final }, null, 2)}</pre>
+          </details>
+        ))
+      ) : (
+        <p>아직 턴이 없습니다.</p>
+      )}
+    </section>
   );
 }
 
@@ -538,22 +573,42 @@ function OnboardingComposer({
   setInput: (value: string) => void;
   step: OnboardingStep;
 }) {
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+
+    textarea.style.height = "auto";
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 130)}px`;
+  }, [input, pending, step]);
+
+  function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+
+    event.preventDefault();
+    event.currentTarget.form?.requestSubmit();
+  }
+
   if (step === "transition") {
     return (
-      <button className="primary-button" onClick={onContinue} type="button">
-        최근 실패 구체화로
+      <button className="primary-button" disabled={pending} onClick={onContinue} type="button">
+        {pending ? "GPT가 다음 질문을 준비하는 중" : "최근 실패 구체화로"}
       </button>
     );
   }
 
   return (
     <form className="chat-composer" onSubmit={onSubmit}>
-      <input
+      <textarea
         aria-label="온보딩 답변"
-        value={input}
-        onChange={(event) => setInput(event.target.value)}
-        placeholder={pending ? "GPT가 동기를 요약하는 중" : step === "complete" ? "온보딩 완료" : "답변을 입력하세요"}
         disabled={step === "complete" || pending}
+        onChange={(event) => setInput(event.target.value)}
+        onKeyDown={handleKeyDown}
+        placeholder={pending ? "GPT가 답변을 준비하는 중" : step === "complete" ? "온보딩 완료" : "답변을 입력하세요"}
+        ref={textareaRef}
+        rows={1}
+        value={input}
       />
       <button aria-label="보내기" disabled={step === "complete" || pending} type="submit">
         <ArrowUp size={18} aria-hidden="true" />
@@ -653,25 +708,207 @@ function DailyCheckIn({
   );
 }
 
-async function summarizeMotive(identityMotive: string) {
+async function runOnboardingController(currentStep: OnboardingStep, latestUserAnswer: string, data: OnboardingData) {
   try {
-    const response = await fetch("/api/elastic/summarize-motive", {
+    const response = await fetch("/api/elastic/onboarding-reply", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ identity_motive: identityMotive }),
+      body: JSON.stringify({
+        current_step: currentStep,
+        latest_user_answer: latestUserAnswer,
+        data,
+      }),
     });
+
     if (!response.ok) throw new Error("Failed");
-    const data = (await response.json()) as { summary: string };
-    return data.summary;
+    const raw = (await response.json()) as OnboardingControllerResult;
+    return {
+      final: normalizeOnboardingResult(currentStep, latestUserAnswer, data, raw),
+      raw,
+      source: "api" as const,
+    };
   } catch {
-    return identityMotive.length > 24 ? `${identityMotive.slice(0, 24)}...` : identityMotive;
+    return {
+      final: fallbackOnboardingTurn(currentStep, latestUserAnswer, data),
+      source: "fallback" as const,
+    };
   }
 }
 
-function createTransitionText(motiveSummary: string) {
-  return `그러니까 ${motiveSummary}이 진짜 이유시네요. 그거 충분히 이해돼요.
-근데 그걸 매일 도달했는지로 재려고 하면 오히려 매일 흔들릴 수 있어요.
-그래서 지금부터는 '그런 사람인지'가 아니라 '오늘 이 행동을 했는지'만 보려고 해요.`;
+function normalizeOnboardingResult(
+  currentStep: OnboardingStep,
+  latestUserAnswer: string,
+  data: OnboardingData,
+  result: OnboardingControllerResult,
+) {
+  if (looksLikeOnboardingQuestion(latestUserAnswer)) {
+    return stayOnboarding(currentStep, {}, fallbackOnboardingHelp(currentStep, data));
+  }
+
+  return {
+    ...result,
+    data_patch: result.data_patch.map((item) =>
+      item.field === "habitName" ? { ...item, value: compactHabitName(item.value) } : item,
+    ),
+  };
+}
+
+function fallbackOnboardingTurn(
+  currentStep: OnboardingStep,
+  latestUserAnswer: string,
+  data: OnboardingData,
+): OnboardingControllerResult {
+  const text = latestUserAnswer.trim();
+  if (!text && currentStep === "habit") {
+    return stayOnboarding(currentStep, {}, "지금 이루고 싶은 습관이 뭔가요?");
+  }
+  if (!text && currentStep === "transition") {
+    return advanceOnboardingStep(currentStep, {}, "좋아요. 최근에 못 지킨 날이나 상황이 언제였어요?");
+  }
+  if (looksLikeOnboardingQuestion(text)) {
+    return stayOnboarding(currentStep, {}, fallbackOnboardingHelp(currentStep, data));
+  }
+
+  switch (currentStep) {
+    case "habit":
+      return advanceOnboardingStep(currentStep, { habitName: compactHabitName(text) }, "좋아요. 이 습관을 왜 만들고 싶으세요?");
+    case "motive": {
+      const motiveSummary = compactMotiveSummary(text);
+      return advanceOnboardingStep(
+        currentStep,
+        { identityMotive: text, motiveSummary },
+        `그러니까 ${motiveSummary}이 중요한 이유네요. 이제 결과가 아니라 오늘 할 행동으로 좁혀볼게요.`,
+      );
+    }
+    case "transition":
+      return advanceOnboardingStep(currentStep, {}, "최근에 못 지킨 날이나 상황이 언제였어요?");
+    case "failure_date":
+      return advanceOnboardingStep(currentStep, { recentFailureDate: text }, "무너지기 직전, 기분이나 몸 상태가 어땠어요?");
+    case "feeling":
+      return advanceOnboardingStep(currentStep, { preBreakdownFeeling: text }, "그때 실제로 뭘 했어요?");
+    case "behavior":
+      return advanceOnboardingStep(currentStep, { actualBreakdownBehavior: text }, "그 다음엔 보통 어떻게 다시 시작해요?");
+    case "recovery":
+      return advanceOnboardingStep(
+        currentStep,
+        { recoveryMethod: text },
+        `${compactHabitName(data.habitName) || "이 습관"}을 세 단계로 나눠볼게요. Mini, 즉 최소 단위는 무엇으로 할까요?`,
+      );
+    case "mini":
+      return advanceOnboardingStep(currentStep, { miniTask: text }, "좋아요. Plus, 즉 보통 단위는 무엇으로 할까요?");
+    case "plus":
+      return advanceOnboardingStep(currentStep, { plusTask: text }, "좋아요. Elite, 즉 도전 단위는 무엇으로 할까요?");
+    case "elite":
+      return advanceOnboardingStep(
+        currentStep,
+        { eliteTask: text },
+        "이게 잘 되면 한 달 뒤 뭐가 달라져 있을까요? 관찰 가능한 장면으로 적어주세요.",
+      );
+    case "vision":
+      return advanceOnboardingStep(
+        currentStep,
+        { monthlyVision: text },
+        "저장했어요. 이제 일상 화면에는 한 달 뒤 변화와 Mini/Plus/Elite만 두고 볼게요.",
+      );
+    default:
+      return stayOnboarding(currentStep, {}, "이미 온보딩이 완료됐어요.");
+  }
+}
+
+function advanceOnboardingStep(
+  currentStep: OnboardingStep,
+  dataPatch: Partial<OnboardingData>,
+  reply: string,
+): OnboardingControllerResult {
+  return {
+    intent: "answer",
+    should_advance: true,
+    next_step: getNextOnboardingStep(currentStep),
+    data_patch: toOnboardingPatch(dataPatch),
+    reply,
+  };
+}
+
+function stayOnboarding(
+  currentStep: OnboardingStep,
+  dataPatch: Partial<OnboardingData>,
+  reply: string,
+): OnboardingControllerResult {
+  return {
+    intent: "question",
+    should_advance: false,
+    next_step: currentStep,
+    data_patch: toOnboardingPatch(dataPatch),
+    reply,
+  };
+}
+
+function applyOnboardingPatch(
+  data: OnboardingData,
+  dataPatch: OnboardingControllerResult["data_patch"],
+): OnboardingData {
+  return dataPatch.reduce((next, item) => ({ ...next, [item.field]: item.value }), data);
+}
+
+function toOnboardingPatch(dataPatch: Partial<OnboardingData>): OnboardingControllerResult["data_patch"] {
+  return Object.entries(dataPatch).map(([field, value]) => ({
+    field: field as keyof OnboardingData,
+    value: value ?? "",
+  }));
+}
+
+function getNextOnboardingStep(currentStep: OnboardingStep): OnboardingStep {
+  const steps: OnboardingStep[] = [
+    "habit",
+    "motive",
+    "transition",
+    "failure_date",
+    "feeling",
+    "behavior",
+    "recovery",
+    "mini",
+    "plus",
+    "elite",
+    "vision",
+    "complete",
+  ];
+  const index = steps.indexOf(currentStep);
+  return steps[Math.min(index + 1, steps.length - 1)] ?? currentStep;
+}
+
+function looksLikeOnboardingQuestion(text: string) {
+  return /[?？]|뭐|뭘|무엇|뭔지|어떻게|추천|좋을 것|좋을까|정해줘|골라줘|예시|괜찮|모르겠|잘\s*모르|막막|고민/.test(
+    text,
+  );
+}
+
+function fallbackOnboardingHelp(step: OnboardingStep, data: OnboardingData) {
+  if (step === "habit") {
+    return "괜찮아요. 지금은 딱 하나만 고르면 됩니다. 데모데이 준비라면 '평일 오전 9시 30분부터 12시 30분까지 문제정의와 기획 작업하기' 같은 습관이 좋아 보여요. 이 방향으로 잡아볼까요?";
+  }
+  if (step === "recovery") {
+    return "지금 상황이라면 '25분만 다시 켜기'처럼 회복 방법을 아주 작게 잡는 게 좋아 보여요. 예를 들면 웹툰을 닫고 타이머 25분을 켠 뒤 문제정의 문서 첫 줄만 여는 방식이요. 이런 식으로 다시 시작한다고 저장할까요?";
+  }
+  if (step === "mini") {
+    return "이 경우 Mini는 부담 없이 시작 가능한 25분 한 세트가 좋아 보여요. 예를 들면 '오전 9시 30분에 문제정의 문서 25분 열기'처럼요. 이걸 Mini로 할까요?";
+  }
+  if (step === "plus") {
+    return "Plus는 원래 목표에 가까운 기본 성공 단위가 좋아요. 예를 들면 '오전 9시 30분부터 12시 30분까지 고인지 작업 2세트 이상'처럼 잡을 수 있어요.";
+  }
+  if (step === "elite") {
+    return "Elite는 데모데이 성과에 직접 닿는 산출물까지 포함하면 좋아요. 예를 들면 '3시간 고인지 작업 후 결제 전환 가설 1개를 검증한다'처럼요.";
+  }
+  return `${data.habitName || "이 단계"}에 대해 조금 더 구체적으로 잡아볼게요. 답변으로 저장할 문장을 말해주면 다음 단계로 넘어갈게요.`;
+}
+
+function compactHabitName(value: string) {
+  if (value.includes("고인지")) return "평일 오전 고인지 작업";
+  return value.length > 28 ? `${value.slice(0, 28)}...` : value;
+}
+
+function compactMotiveSummary(value: string) {
+  if (value.includes("데모데이") || value.includes("결제")) return "데모데이 성과와 B2C 결제 10건";
+  return value.length > 24 ? `${value.slice(0, 24)}...` : value;
 }
 
 function createDailyNote(status: CheckInStatus, memo: string) {

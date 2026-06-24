@@ -29,7 +29,7 @@ export function AuthPanel() {
       } else {
         await signUpWithPassword(email, password);
         setSignupSuccess(true);
-        setMessage("계정 생성 요청이 완료됐어요.");
+        setMessage("계정이 생성됐어요.");
       }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "인증을 처리하지 못했어요.");
@@ -92,10 +92,6 @@ export function AuthPanel() {
         <div className="modal-backdrop" role="presentation">
           <section className="confirmation-modal" role="dialog" aria-modal="true" aria-labelledby="signup-success-title">
             <h2 id="signup-success-title">계정이 생성됐어요</h2>
-            <p>
-              {email} 계정 생성 요청이 완료됐습니다. Supabase에서 이메일 확인 설정이 켜져 있다면 메일 확인 후
-              로그인할 수 있어요.
-            </p>
             <button className="primary-button" onClick={() => window.location.reload()} type="button">
               확인
             </button>
