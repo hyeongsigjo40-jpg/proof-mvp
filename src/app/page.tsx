@@ -844,15 +844,11 @@ async function runOnboardingController(currentStep: OnboardingStep, latestUserAn
 }
 
 function normalizeOnboardingResult(
-  currentStep: OnboardingStep,
-  latestUserAnswer: string,
-  data: OnboardingData,
+  _currentStep: OnboardingStep,
+  _latestUserAnswer: string,
+  _data: OnboardingData,
   result: OnboardingControllerResult,
 ) {
-  if (looksLikeOnboardingQuestion(latestUserAnswer)) {
-    return stayOnboarding(currentStep, {}, fallbackOnboardingHelp(currentStep, data));
-  }
-
   return {
     ...result,
     data_patch: result.data_patch.map((item) =>
