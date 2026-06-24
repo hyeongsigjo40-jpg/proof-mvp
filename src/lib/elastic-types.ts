@@ -4,6 +4,9 @@ export type ElasticCheckInStatus = ElasticLevel | "not_done" | "no_response";
 export type ElasticProfile = {
   user_id: string;
   scope?: string;
+  life_area: string | null;
+  why_change: string | null;
+  identity_statement: string | null;
   habit_name: string;
   identity_motive: string;
   motive_summary: string | null;

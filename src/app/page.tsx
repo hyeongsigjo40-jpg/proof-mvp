@@ -190,6 +190,7 @@ export default function Home() {
       if (profile?.onboarding_completed_at) {
         const nextData = mapProfileToData(profile);
         setData(nextData);
+        setGoalData(mapProfileToGoalData(profile));
         setNextMini(nextData.miniTask);
         setNextPlus(nextData.plusTask);
         setNextElite(nextData.eliteTask);
@@ -405,6 +406,9 @@ export default function Home() {
     await saveElasticProfile({
       user_id: userId,
       scope: storageScope,
+      life_area: goalData.lifeArea || null,
+      why_change: goalData.whyChange || null,
+      identity_statement: goalData.identityStatement || null,
       habit_name: nextData.habitName,
       identity_motive: nextData.identityMotive,
       motive_summary: nextData.motiveSummary,
@@ -441,6 +445,17 @@ export default function Home() {
   async function resetDebugConversation() {
     resetOnboardingState();
     setDebugEvents([]);
+    assistant(GOAL_AREA_QUESTION);
+  }
+
+  function jumpToStep(target: OnboardingStep) {
+    setStep(target);
+    setMessages([{ role: "assistant", text: `[debug] ${target} 단계로 이동` }]);
+  }
+
+  async function skipGoalPhase() {
+    setGoalData({ lifeArea: "[스킵]", whyChange: "[스킵]", identityStatement: "[스킵]" });
+    setStep("habit");
     setPending(true);
     const opening = await runOnboardingController("habit", "", emptyOnboarding);
     assistant(opening.final.reply);
@@ -669,10 +684,14 @@ export default function Home() {
 
             {debugEnabled ? (
               <OnboardingDebugPanel
+                data={data}
                 events={debugEvents}
+                goalData={goalData}
+                onJumpToStep={jumpToStep}
                 onNewSession={startNewDebugSession}
                 onResetConversation={resetDebugConversation}
                 onResetSession={resetCurrentDebugSession}
+                onSkipGoal={skipGoalPhase}
                 pending={pending}
                 scope={storageScope}
                 sessionId={debugSessionId}
@@ -686,56 +705,153 @@ export default function Home() {
   );
 }
 
+const ALL_STEPS: OnboardingStep[] = [
+  "goal_area", "goal_why", "goal_identity", "goal_complete",
+  "habit", "motive", "transition", "failure_date", "feeling",
+  "behavior", "recovery", "elastic_intro", "mini", "plus", "elite", "vision", "complete",
+];
+
+const INTENT_COLOR: Record<string, string> = {
+  answer: "#35a942",
+  question: "#6a57e8",
+  correction: "#e8a010",
+  unclear: "#9a4b45",
+  continue: "#315b4c",
+};
+
 function OnboardingDebugPanel({
+  data,
   events,
+  goalData,
+  onJumpToStep,
   onNewSession,
   onResetConversation,
   onResetSession,
+  onSkipGoal,
   pending,
   scope,
   sessionId,
   step,
 }: {
+  data: OnboardingData;
   events: OnboardingDebugEvent[];
+  goalData: GoalData;
+  onJumpToStep: (step: OnboardingStep) => void;
   onNewSession: () => void;
   onResetConversation: () => void;
   onResetSession: () => void;
+  onSkipGoal: () => void;
   pending: boolean;
   scope: string;
   sessionId: string;
   step: OnboardingStep;
 }) {
+  const currentIdx = ALL_STEPS.indexOf(step);
+
+  const goalFields: [string, string][] = [
+    ["삶의 영역", goalData.lifeArea],
+    ["이유", goalData.whyChange],
+    ["정체성 문장", goalData.identityStatement],
+  ];
+  const habitFields: [string, string][] = [
+    ["habitName", data.habitName],
+    ["miniTask", data.miniTask],
+    ["plusTask", data.plusTask],
+    ["eliteTask", data.eliteTask],
+    ["monthlyVision", data.monthlyVision],
+    ["recoveryMethod", data.recoveryMethod],
+  ];
+
   return (
     <section className="debug-panel" aria-label="온보딩 디버그">
-      <strong>Debug: {step}</strong>
-      <div className="debug-meta">
-        <span>scope: {scope}</span>
-        <span>session: {sessionId.slice(0, 8)}</span>
+      <div className="debug-header-row">
+        <strong className="debug-current-step">{step}</strong>
+        <span className="debug-meta-inline">
+          {scope} · {sessionId.slice(0, 8)}
+        </span>
       </div>
+
+      {/* Step progress */}
+      <div className="debug-step-progress">
+        {ALL_STEPS.map((s, i) => (
+          <button
+            key={s}
+            className={`debug-step-chip${i === currentIdx ? " active" : i < currentIdx ? " done" : ""}`}
+            disabled={pending}
+            onClick={() => onJumpToStep(s)}
+            title={s}
+            type="button"
+          >
+            {s.replace("goal_", "g:").replace("failure_date", "fail").replace("elastic_intro", "intro")}
+          </button>
+        ))}
+      </div>
+
+      {/* Quick actions */}
       <div className="debug-actions">
-        <button disabled={pending} onClick={onResetConversation} type="button">
-          대화만 초기화
-        </button>
-        <button disabled={pending} onClick={onResetSession} type="button">
-          현재 세션 초기화
-        </button>
-        <button disabled={pending} onClick={onNewSession} type="button">
-          새 디버그 세션
-        </button>
+        <button className="debug-btn-accent" disabled={pending} onClick={onSkipGoal} type="button">목표 스킵→habit</button>
+        <button disabled={pending} onClick={onResetConversation} type="button">대화 초기화</button>
+        <button disabled={pending} onClick={onResetSession} type="button">세션 초기화</button>
+        <button disabled={pending} onClick={onNewSession} type="button">새 세션</button>
       </div>
-      {events.length ? (
-        events.map((event) => (
-          <details key={event.id}>
-            <summary>
-              {event.source} / {event.stepBefore} {"->"} {event.final.next_step} / advance{" "}
-              {event.final.should_advance ? "true" : "false"}
-            </summary>
-            <pre>{JSON.stringify({ input: event.input, raw: event.raw, final: event.final }, null, 2)}</pre>
-          </details>
-        ))
-      ) : (
-        <p>아직 턴이 없습니다.</p>
-      )}
+
+      {/* Current data snapshot */}
+      <details open>
+        <summary className="debug-section-title">현재 데이터</summary>
+        <div className="debug-data-grid">
+          <div className="debug-data-section">
+            <span>Goal</span>
+            {goalFields.map(([label, val]) => (
+              <div key={label} className={`debug-data-row${val ? " filled" : " empty"}`}>
+                <span>{label}</span>
+                <span>{val || "—"}</span>
+              </div>
+            ))}
+          </div>
+          <div className="debug-data-section">
+            <span>Habit</span>
+            {habitFields.map(([label, val]) => (
+              <div key={label} className={`debug-data-row${val ? " filled" : " empty"}`}>
+                <span>{label}</span>
+                <span>{val || "—"}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </details>
+
+      {/* Recent turns */}
+      <details open>
+        <summary className="debug-section-title">최근 턴 ({events.length})</summary>
+        {events.length ? (
+          events.map((event) => (
+            <details key={event.id} className="debug-turn">
+              <summary>
+                <span
+                  className="debug-intent-badge"
+                  style={{ background: INTENT_COLOR[event.final.intent] ?? "#444" }}
+                >
+                  {event.final.intent}
+                </span>
+                <span className="debug-turn-route">
+                  {event.stepBefore} → {event.final.next_step}
+                </span>
+                <span className="debug-source-badge">{event.source}</span>
+                {event.final.should_advance && <span className="debug-advance-badge">▶</span>}
+              </summary>
+              <div className="debug-turn-body">
+                <div className="debug-turn-input">입력: {event.input || "(없음)"}</div>
+                <div className="debug-turn-reply">응답: {event.final.reply}</div>
+                {event.final.data_patch.length > 0 && (
+                  <pre>{JSON.stringify(event.final.data_patch, null, 2)}</pre>
+                )}
+              </div>
+            </details>
+          ))
+        ) : (
+          <p>아직 턴이 없습니다.</p>
+        )}
+      </details>
     </section>
   );
 }
@@ -1114,6 +1230,14 @@ function mapProfileToData(profile: ElasticProfile): OnboardingData {
     plusTask: profile.plus_task,
     eliteTask: profile.elite_task,
     monthlyVision: profile.monthly_vision,
+  };
+}
+
+function mapProfileToGoalData(profile: ElasticProfile): GoalData {
+  return {
+    lifeArea: profile.life_area ?? "",
+    whyChange: profile.why_change ?? "",
+    identityStatement: profile.identity_statement ?? "",
   };
 }
 

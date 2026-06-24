@@ -1227,71 +1227,229 @@ blockquote {
 }
 
 .debug-panel {
-  background: #101815;
+  background: #0e1a14;
   border-radius: 8px;
   color: #e6f0ea;
   display: grid;
   font-size: 11px;
-  gap: 8px;
-  max-height: 240px;
+  gap: 10px;
+  max-height: 540px;
   overflow: auto;
-  padding: 10px;
+  padding: 12px;
 }
 
-.debug-panel strong {
-  color: #bfe4c7;
-  font-size: 12px;
+.debug-header-row {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
 }
 
-.debug-meta {
-  color: #b9c4be;
-  display: grid;
-  gap: 3px;
-  overflow-wrap: anywhere;
+.debug-current-step {
+  color: #7edea0;
+  font-size: 13px;
+}
+
+.debug-meta-inline {
+  color: #7a9486;
+  font-size: 10px;
+}
+
+.debug-step-progress {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.debug-step-chip {
+  background: #1a2e22;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 4px;
+  color: #7a9486;
+  cursor: pointer;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 3px 5px;
+  white-space: nowrap;
+}
+
+.debug-step-chip.done {
+  background: #1e3d28;
+  border-color: rgba(126,222,160,0.3);
+  color: #7edea0;
+}
+
+.debug-step-chip.active {
+  background: #315b4c;
+  border-color: #7edea0;
+  color: #fff;
+}
+
+.debug-step-chip:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .debug-actions {
-  display: grid;
-  gap: 6px;
-  grid-template-columns: 1fr;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
 }
 
 .debug-actions button {
-  background: #20332b;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 6px;
-  color: #e6f0ea;
+  background: #1a2e22;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 5px;
+  color: #b9c4be;
   cursor: pointer;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 800;
-  min-height: 30px;
+  padding: 4px 8px;
 }
 
 .debug-actions button:disabled {
   cursor: not-allowed;
-  opacity: 0.55;
+  opacity: 0.5;
 }
 
-.debug-panel details {
-  border-top: 1px solid rgba(255, 255, 255, 0.12);
-  padding-top: 7px;
+.debug-btn-accent {
+  background: #25463a !important;
+  border-color: rgba(126,222,160,0.3) !important;
+  color: #7edea0 !important;
 }
 
-.debug-panel summary {
+.debug-section-title {
+  color: #7a9486;
   cursor: pointer;
-  font-weight: 750;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
-.debug-panel p {
+.debug-data-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 1fr 1fr;
+  margin-top: 6px;
+}
+
+.debug-data-section {
+  display: grid;
+  gap: 3px;
+}
+
+.debug-data-section > span {
+  color: #7a9486;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  margin-bottom: 2px;
+  text-transform: uppercase;
+}
+
+.debug-data-row {
+  border-radius: 3px;
+  display: grid;
+  gap: 2px;
+  padding: 3px 5px;
+}
+
+.debug-data-row.filled {
+  background: rgba(53, 169, 66, 0.1);
+}
+
+.debug-data-row.empty {
+  background: rgba(255,255,255,0.03);
+}
+
+.debug-data-row > span:first-child {
+  color: #7a9486;
+  font-size: 9px;
+}
+
+.debug-data-row > span:last-child {
+  color: #dce8e1;
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.debug-turn {
+  border-top: 1px solid rgba(255,255,255,0.07);
+  margin-top: 4px;
+  padding-top: 4px;
+}
+
+.debug-turn > summary {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.debug-intent-badge {
+  border-radius: 3px;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 900;
+  padding: 2px 5px;
+}
+
+.debug-turn-route {
   color: #b9c4be;
-  margin: 0;
+  font-size: 10px;
+}
+
+.debug-source-badge {
+  background: rgba(255,255,255,0.08);
+  border-radius: 3px;
+  color: #7a9486;
+  font-size: 9px;
+  padding: 1px 4px;
+}
+
+.debug-advance-badge {
+  color: #7edea0;
+  font-size: 10px;
+}
+
+.debug-turn-body {
+  display: grid;
+  gap: 4px;
+  margin-top: 5px;
+  padding-left: 6px;
+}
+
+.debug-turn-input {
+  color: #7a9486;
+  font-size: 10px;
+}
+
+.debug-turn-reply {
+  color: #dce8e1;
+  font-size: 10px;
+  white-space: pre-wrap;
 }
 
 .debug-panel pre {
-  color: #dce8e1;
-  margin: 8px 0 0;
+  color: #7edea0;
+  font-size: 9px;
+  margin: 3px 0 0;
   overflow: auto;
   white-space: pre-wrap;
+}
+
+.debug-panel p {
+  color: #7a9486;
+  margin: 0;
+}
+
+.debug-panel details {
+  display: grid;
+  gap: 4px;
 }
 
 @media (max-width: 1280px) {
