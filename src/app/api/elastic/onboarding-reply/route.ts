@@ -66,7 +66,7 @@ export async function POST(request: Request) {
       {
         role: "system",
         content:
-          "너는 Proof 온보딩 진행자다. data 객체에 사용자가 이미 말한 정보가 담겨 있다. 항상 활용한다.\n\n[목표 파트: goal_area→goal_why→goal_identity]\n자연스러운 대화로 진행. goal_identity에서 '나는 [이전 패턴]이 아니라, [새 행동 정체성]인 사람이다.' 형태 문장을 goalIdentityStatement에 저장.\n\n[습관 목표 파트: habit_action→habit_period→habit_frequency→habit_when→habit_amount]\nSMART 습관 문장을 한 필드씩 채워나간다. 각 필드에 해당하는 답변이 오면 저장 후 advance. 불명확하면 예시를 들어 도와준다.\n- habit_action: 구체적인 행동 (예: 토익 LC 듣기, 런닝)\n- habit_period: 며칠/몇 주 (예: 4주, 14일)\n- habit_frequency: 주 몇 회 또는 매일 (예: 주 5회, 매일)\n- habit_when: 언제/어떤 상황 (예: 저녁 식사 후, 아침 7시)\n- habit_amount: 얼마나 (예: 10분, 3km)\n\n[goal_complete] 버튼으로 처리, 직접 호출 안 함.\n[mini→plus→elite] Elastic Habit 3단계 설정. 사용자가 동의/선택 시 저장.\n\n공통: 정체성 평가·의지력 판단·죄책감 유발 금지. reply는 한국어 1-2문장.",
+          "너는 Proof 온보딩 진행자다. data 객체에 사용자가 이미 말한 정보가 담겨 있다. 항상 활용한다.\n\n[목표 파트: goal_area→goal_why→goal_identity]\n자연스러운 대화로 진행. goal_identity에서 '나는 [이전 패턴]이 아니라, [새 행동 정체성]인 사람이다.' 형태 문장을 goalIdentityStatement에 저장.\n\n[습관 목표 파트: habit_action→habit_period→habit_frequency→habit_when→habit_amount]\nSMART 습관 문장을 한 필드씩 채워나간다. 각 필드에 해당하는 답변이 오면 저장 후 advance. 불명확하면 예시를 들어 도와준다.\n- habit_action: 구체적인 행동 (예: 토익 LC 듣기, 런닝)\n- habit_period: 며칠/몇 주 (예: 4주, 14일)\n- habit_frequency: 주 몇 회 또는 매일 (예: 주 5회, 매일)\n- habit_when: 언제/어떤 상황 (예: 저녁 식사 후, 아침 7시)\n- habit_amount: 얼마나 (예: 10분, 3km)\n\n[goal_complete] 버튼으로 처리, 직접 호출 안 함.\n\n[mini→plus→elite 수정 규칙]\n- 기본 흐름: mini→plus→elite 순서로 진행.\n- 사용자가 이미 지나간 레벨을 수정하려 하면(예: plus 스텝에서 'mini를 바꾸고 싶어'): 해당 레벨 필드에 저장하고 next_step을 그 레벨로 되돌린다(예: next_step=mini). 그러면 UI가 다시 그 레벨로 돌아가 다음 단계로 자연스럽게 이어진다.\n- 저장할 필드는 사용자가 말하는 레벨(mini/plus/elite)에 맞게 결정한다. 현재 스텝이 아닌 사용자 의도 기준.\n\n공통: 정체성 평가·의지력 판단·죄책감 유발 금지. reply는 한국어 1-2문장.",
       },
       {
         role: "user",
@@ -75,7 +75,7 @@ export async function POST(request: Request) {
           CURRENT_STEP: body.current_step,
           current_step_goal: stepGoal(body.current_step),
           next_step_if_answer: getNextStep(body.current_step),
-          IMPORTANT_RULE: `현재 스텝은 "${body.current_step}"이다. data_patch의 field는 반드시 이 스텝에 해당하는 필드만 사용한다. 다른 레벨의 필드 저장 절대 금지.`,
+          IMPORTANT_RULE: `현재 UI 스텝은 "${body.current_step}"이다. 사용자가 현재 스텝에 답변하면 해당 필드에 저장한다. 단, 사용자가 이전 레벨(예: "mini를 바꾸고 싶어")을 명시적으로 언급하면, 그 레벨의 필드에 저장하고 next_step도 그 레벨로 되돌린다.`,
         }),
       },
     ],
@@ -144,11 +144,11 @@ function stepGoal(step: OnboardingStep): string {
     case "habit_amount":
       return "얼마나 할지(시간, 양, 거리 등) habitAmount에 저장. 저장 후 next_step은 goal_complete.";
     case "mini":
-      return "현재 스텝=mini. 저장 대상=miniTask만. 사용자가 제안하거나 동의한 행동을 miniTask에 저장하고 next_step=plus. plusTask/eliteTask 저장 금지. Mini는 가장 작은 단위(망한 날에도 가능한 것)다.";
+      return "현재 스텝=mini. Mini는 망한 날에도 가능한 최소 행동. 사용자 답변을 miniTask에 저장, next_step=plus.";
     case "plus":
-      return "현재 스텝=plus. 저장 대상=plusTask만. 사용자가 제안하거나 동의한 행동을 plusTask에 저장하고 next_step=elite. miniTask/eliteTask 저장 금지. Plus는 보통 날의 기본 성공 단위다.";
+      return "현재 스텝=plus. Plus는 보통 날의 기본 성공 단위. 사용자가 'mini를 바꾸고 싶다'고 하면 miniTask에 저장하고 next_step=mini로 되돌린다. 아니면 plusTask에 저장, next_step=elite.";
     case "elite":
-      return "현재 스텝=elite. 저장 대상=eliteTask만. 사용자가 제안하거나 동의한 행동을 eliteTask에 저장하고 next_step=complete. miniTask/plusTask 저장 금지. Elite는 여유 있는 날의 도전 단위다.";
+      return "현재 스텝=elite. Elite는 여유 있는 날의 도전 단위. 사용자가 'mini/plus를 바꾸고 싶다'고 하면 해당 필드에 저장하고 next_step을 mini 또는 plus로 되돌린다. 아니면 eliteTask에 저장, next_step=complete.";
     default:
       return "온보딩 완료.";
   }
