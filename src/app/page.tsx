@@ -1,21 +1,22 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import { ArrowUp, CalendarCheck, Check, Circle, Flame, MessageCircle, Minus, PencilLine, Target } from "lucide-react";
+import { AuthPanel } from "@/components/AuthPanel";
+import { LoadingState } from "@/components/LoadingState";
+import { todayKey } from "@/lib/date";
 import {
-  ArrowUp,
-  CalendarCheck,
-  Check,
-  Circle,
-  Flame,
-  MessageCircle,
-  Minus,
-  PencilLine,
-  RotateCcw,
-  Target,
-} from "lucide-react";
+  getElasticCheckIns,
+  getElasticProfile,
+  saveElasticCheckIn,
+  saveElasticProfile,
+  updateElasticTasks,
+} from "@/lib/elastic-store";
+import type { ElasticCheckIn, ElasticCheckInStatus, ElasticProfile } from "@/lib/elastic-types";
+import { useProofSession } from "@/lib/use-proof-session";
 
 type ElasticLevel = "mini" | "plus" | "elite";
-type CheckInStatus = ElasticLevel | "not_done" | "no_response" | "open";
+type CheckInStatus = ElasticCheckInStatus | "open";
 type OnboardingStep =
   | "habit"
   | "motive"
@@ -38,6 +39,7 @@ type Message = {
 type OnboardingData = {
   habitName: string;
   identityMotive: string;
+  motiveSummary: string;
   recentFailureDate: string;
   preBreakdownFeeling: string;
   actualBreakdownBehavior: string;
@@ -56,6 +58,7 @@ type DailyRecord = {
 const emptyOnboarding: OnboardingData = {
   habitName: "",
   identityMotive: "",
+  motiveSummary: "",
   recentFailureDate: "",
   preBreakdownFeeling: "",
   actualBreakdownBehavior: "",
@@ -77,23 +80,14 @@ const statusMeta = {
   open: { label: "열림", icon: PencilLine },
 };
 
-const initialRecords: DailyRecord[] = Array.from({ length: 31 }, (_, index) => ({
-  day: index + 1,
-  status: index === 0 ? "mini" : index === 1 ? "plus" : "open",
-}));
-
-const initialMessages: Message[] = [
-  {
-    role: "assistant",
-    text: "지금 이루고 싶은 습관이 뭔가요?",
-  },
-];
+const initialMessages: Message[] = [{ role: "assistant", text: "지금 이루고 싶은 습관이 뭔가요?" }];
 
 export default function Home() {
+  const { loading, userId, error } = useProofSession();
   const [mode, setMode] = useState<"onboarding" | "daily">("onboarding");
   const [step, setStep] = useState<OnboardingStep>("habit");
   const [data, setData] = useState<OnboardingData>(emptyOnboarding);
-  const [records, setRecords] = useState<DailyRecord[]>(initialRecords);
+  const [records, setRecords] = useState<DailyRecord[]>(createMonthRecords([]));
   const [messages, setMessages] = useState<Message[]>(initialMessages);
   const [input, setInput] = useState("");
   const [selectedCheckIn, setSelectedCheckIn] = useState<CheckInStatus | null>(null);
@@ -102,6 +96,38 @@ export default function Home() {
   const [nextPlus, setNextPlus] = useState("");
   const [nextElite, setNextElite] = useState("");
   const [miniFailureCount, setMiniFailureCount] = useState(0);
+  const [pending, setPending] = useState(false);
+  const [saveMessage, setSaveMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    async function load() {
+      if (!userId) return;
+
+      const [profile, checkIns] = await Promise.all([getElasticProfile(userId), getElasticCheckIns(userId)]);
+      if (profile?.onboarding_completed_at) {
+        const nextData = mapProfileToData(profile);
+        setData(nextData);
+        setNextMini(nextData.miniTask);
+        setNextPlus(nextData.plusTask);
+        setNextElite(nextData.eliteTask);
+        setMode("daily");
+        setStep("complete");
+        setMessages([
+          { role: "assistant", text: "오늘 체크인을 남겨주세요. 결과는 왼쪽 Elastic Habit Tracker에 저장됩니다." },
+        ]);
+      }
+
+      setRecords(createMonthRecords(checkIns));
+      setMiniFailureCount(countRecentMiniFailures(checkIns));
+      const today = checkIns.find((checkIn) => checkIn.checkin_date === todayKey());
+      if (today) {
+        setSelectedCheckIn(today.result);
+        setMemo(today.memo ?? "");
+      }
+    }
+
+    void load();
+  }, [userId]);
 
   const levelCounts = useMemo(
     () => ({
@@ -116,19 +142,17 @@ export default function Home() {
   const completedCount = levelCounts.plus + levelCounts.elite;
   const partialCount = levelCounts.mini;
 
-  function handleTextSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleTextSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const text = input.trim();
-    if (!text) {
-      return;
-    }
+    if (!text) return;
 
     setMessages((current) => [...current, { role: "user", text }]);
     setInput("");
-    advanceOnboarding(text);
+    await advanceOnboarding(text);
   }
 
-  function advanceOnboarding(text: string) {
+  async function advanceOnboarding(text: string) {
     if (step === "habit") {
       setData((current) => ({ ...current, habitName: text }));
       assistant("이걸 왜 만들고 싶으세요?");
@@ -137,9 +161,12 @@ export default function Home() {
     }
 
     if (step === "motive") {
-      setData((current) => ({ ...current, identityMotive: text }));
-      assistant(createTransitionText(text));
+      setPending(true);
+      const motiveSummary = await summarizeMotive(text);
+      setData((current) => ({ ...current, identityMotive: text, motiveSummary }));
+      assistant(createTransitionText(motiveSummary));
       setStep("transition");
+      setPending(false);
       return;
     }
 
@@ -193,14 +220,13 @@ export default function Home() {
     }
 
     if (step === "vision") {
-      setData((current) => {
-        const next = { ...current, monthlyVision: text };
-        setNextMini(next.miniTask);
-        setNextPlus(next.plusTask);
-        setNextElite(next.eliteTask);
-        return next;
-      });
-      assistant("좋아요. 이제 일상 화면에는 한 달 뒤의 관찰 가능한 변화와 Mini/Plus/Elite만 두고 볼게요.");
+      const next = { ...data, monthlyVision: text };
+      setData(next);
+      setNextMini(next.miniTask);
+      setNextPlus(next.plusTask);
+      setNextElite(next.eliteTask);
+      await persistProfile(next);
+      assistant("저장했어요. 이제 일상 화면에는 한 달 뒤의 관찰 가능한 변화와 Mini/Plus/Elite만 두고 볼게요.");
       setStep("complete");
       setMode("daily");
     }
@@ -215,50 +241,86 @@ export default function Home() {
     setSelectedCheckIn(status);
   }
 
-  function saveDailyCheckIn() {
-    if (!selectedCheckIn) {
-      return;
-    }
+  async function saveDailyCheckIn() {
+    if (!selectedCheckIn || !userId || selectedCheckIn === "open") return;
 
-    const note = createDailyNote(selectedCheckIn, memo);
     const hasSelfNarrative = selfNarrativeKeywords.some((keyword) => memo.includes(keyword));
+    const saved = await saveElasticCheckIn({
+      user_id: userId,
+      result: selectedCheckIn,
+      memo,
+      self_narrative_detected: hasSelfNarrative,
+    });
+    applySavedCheckIn(saved);
     setMessages((current) => [
       ...current,
-      { role: "user", text: note },
+      { role: "user", text: createDailyNote(selectedCheckIn, memo) },
       ...(hasSelfNarrative
-        ? [
-            {
-              role: "assistant" as const,
-              text: "기억하시죠, 오늘은 그 사람인지가 아니라 이 행동을 했는지만 보기로 했었죠",
-            },
-          ]
+        ? [{ role: "assistant" as const, text: "기억하시죠, 오늘은 그 사람인지가 아니라 이 행동을 했는지만 보기로 했었죠" }]
         : []),
-      { role: "assistant", text: "오늘 기록을 반영했어요. 이제 내일의 세 단계는 그대로 둘지 조정할지 확인해볼게요." },
+      { role: "assistant", text: "오늘 기록을 저장했어요. 이제 내일의 세 단계는 그대로 둘지 조정할지 확인해볼게요." },
     ]);
-
-    setRecords((current) => current.map((record) => (record.day === 3 ? { ...record, status: selectedCheckIn } : record)));
     setMiniFailureCount((current) => (selectedCheckIn === "not_done" ? current + 1 : 0));
-    setMemo("");
+    setSaveMessage("체크인을 Supabase에 저장했어요.");
   }
 
-  function saveNextPlan() {
+  async function saveNextPlan() {
+    if (!userId) return;
+    const nextTasks = {
+      mini_task: nextMini || data.miniTask,
+      plus_task: nextPlus || data.plusTask,
+      elite_task: nextElite || data.eliteTask,
+    };
+    await updateElasticTasks(userId, nextTasks);
     setData((current) => ({
       ...current,
-      miniTask: nextMini || current.miniTask,
-      plusTask: nextPlus || current.plusTask,
-      eliteTask: nextElite || current.eliteTask,
+      miniTask: nextTasks.mini_task,
+      plusTask: nextTasks.plus_task,
+      eliteTask: nextTasks.elite_task,
     }));
-    assistant("내일 계획을 반영했어요. Mini는 계속 가장 쉽게 시작할 수 있는 단위로 유지합니다.");
+    assistant("내일 계획을 Supabase에 저장했어요. Mini는 계속 가장 쉽게 시작할 수 있는 단위로 유지합니다.");
   }
 
-  function markNoResponse() {
-    setRecords((current) => current.map((record) => (record.day === 3 ? { ...record, status: "no_response" } : record)));
-    assistant("응답 없음으로 구분해둘게요. 시스템이 임의로 하지 않음으로 판정하지 않습니다.");
+  async function markNoResponse() {
+    if (!userId) return;
+    const saved = await saveElasticCheckIn({ user_id: userId, result: "no_response" });
+    applySavedCheckIn(saved);
+    assistant("응답 없음으로 구분해 저장했어요. 시스템이 임의로 하지 않음으로 판정하지 않습니다.");
+  }
+
+  async function persistProfile(nextData: OnboardingData) {
+    if (!userId) return;
+    await saveElasticProfile({
+      user_id: userId,
+      habit_name: nextData.habitName,
+      identity_motive: nextData.identityMotive,
+      motive_summary: nextData.motiveSummary,
+      recent_failure_date: nextData.recentFailureDate || null,
+      pre_breakdown_feeling: nextData.preBreakdownFeeling || null,
+      actual_breakdown_behavior: nextData.actualBreakdownBehavior || null,
+      recovery_method: nextData.recoveryMethod || null,
+      mini_task: nextData.miniTask,
+      plus_task: nextData.plusTask,
+      elite_task: nextData.eliteTask,
+      monthly_vision: nextData.monthlyVision,
+      onboarding_completed_at: new Date().toISOString(),
+    });
+  }
+
+  function applySavedCheckIn(checkIn: ElasticCheckIn) {
+    setRecords((current) =>
+      current.map((record) =>
+        record.day === Number(checkIn.checkin_date.slice(-2)) ? { ...record, status: checkIn.result } : record,
+      ),
+    );
+    setSelectedCheckIn(checkIn.result);
   }
 
   function assistant(text: string) {
     setMessages((current) => [...current, { role: "assistant", text }]);
   }
+
+  if (loading) return <LoadingState />;
 
   return (
     <main className="tracker-workspace">
@@ -317,9 +379,7 @@ export default function Home() {
             </div>
             <p>{selectedCheckIn ? createDailyNote(selectedCheckIn, memo) : "오늘 어떤 단계까지 했는지 선택합니다."}</p>
           </div>
-          <span className={`tracker-status ${selectedCheckIn || "open"}`}>
-            {statusMeta[selectedCheckIn || "open"].label}
-          </span>
+          <span className={`tracker-status ${selectedCheckIn || "open"}`}>{statusMeta[selectedCheckIn || "open"].label}</span>
         </section>
 
         <section className="scorecard-strip" aria-label="이번 달 Mini Plus Elite 카운트">
@@ -355,43 +415,56 @@ export default function Home() {
           <MessageCircle size={18} aria-hidden="true" />
           <div>
             <strong>{mode === "onboarding" ? "Proof Onboarding" : "Daily Check-in"}</strong>
-            <span>{mode === "onboarding" ? "고정 5단계 시나리오" : "순수 과제 중심 체크인"}</span>
+            <span>{mode === "onboarding" ? "고정 5단계 시나리오" : "Supabase 저장 연결됨"}</span>
           </div>
         </div>
 
-        <div className="chat-log">
-          {messages.map((message, index) => (
-            <div className={`chat-bubble ${message.role}`} key={`${message.role}-${index}`}>
-              {message.text}
-            </div>
-          ))}
-        </div>
+        {error ? <p className="error-text">{error}</p> : null}
 
-        {mode === "onboarding" ? (
-          <OnboardingComposer
-            input={input}
-            setInput={setInput}
-            step={step}
-            onSubmit={handleTextSubmit}
-            onContinue={continueAfterTransition}
-          />
+        {!userId ? (
+          <div className="daily-panel">
+            <AuthPanel />
+          </div>
         ) : (
-          <DailyCheckIn
-            data={data}
-            memo={memo}
-            nextElite={nextElite}
-            nextMini={nextMini}
-            nextPlus={nextPlus}
-            selectedCheckIn={selectedCheckIn}
-            setMemo={setMemo}
-            setNextElite={setNextElite}
-            setNextMini={setNextMini}
-            setNextPlus={setNextPlus}
-            onCheckIn={handleCheckIn}
-            onNoResponse={markNoResponse}
-            onSaveCheckIn={saveDailyCheckIn}
-            onSavePlan={saveNextPlan}
-          />
+          <>
+            <div className="chat-log">
+              {messages.map((message, index) => (
+                <div className={`chat-bubble ${message.role}`} key={`${message.role}-${index}`}>
+                  {message.text}
+                </div>
+              ))}
+            </div>
+
+            {saveMessage ? <p className="form-message">{saveMessage}</p> : null}
+
+            {mode === "onboarding" ? (
+              <OnboardingComposer
+                input={input}
+                setInput={setInput}
+                step={step}
+                pending={pending}
+                onSubmit={handleTextSubmit}
+                onContinue={continueAfterTransition}
+              />
+            ) : (
+              <DailyCheckIn
+                data={data}
+                memo={memo}
+                nextElite={nextElite}
+                nextMini={nextMini}
+                nextPlus={nextPlus}
+                selectedCheckIn={selectedCheckIn}
+                setMemo={setMemo}
+                setNextElite={setNextElite}
+                setNextMini={setNextMini}
+                setNextPlus={setNextPlus}
+                onCheckIn={handleCheckIn}
+                onNoResponse={markNoResponse}
+                onSaveCheckIn={saveDailyCheckIn}
+                onSavePlan={saveNextPlan}
+              />
+            )}
+          </>
         )}
       </aside>
     </main>
@@ -402,12 +475,14 @@ function OnboardingComposer({
   input,
   onContinue,
   onSubmit,
+  pending,
   setInput,
   step,
 }: {
   input: string;
   onContinue: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  pending: boolean;
   setInput: (value: string) => void;
   step: OnboardingStep;
 }) {
@@ -425,10 +500,10 @@ function OnboardingComposer({
         aria-label="온보딩 답변"
         value={input}
         onChange={(event) => setInput(event.target.value)}
-        placeholder={step === "complete" ? "온보딩 완료" : "답변을 입력하세요"}
-        disabled={step === "complete"}
+        placeholder={pending ? "GPT가 동기를 요약하는 중" : step === "complete" ? "온보딩 완료" : "답변을 입력하세요"}
+        disabled={step === "complete" || pending}
       />
-      <button aria-label="보내기" disabled={step === "complete"} type="submit">
+      <button aria-label="보내기" disabled={step === "complete" || pending} type="submit">
         <ArrowUp size={18} aria-hidden="true" />
       </button>
     </form>
@@ -526,21 +601,61 @@ function DailyCheckIn({
   );
 }
 
-function createTransitionText(identityMotive: string) {
-  return `그러니까 ${summarizeMotive(identityMotive)}이 진짜 이유시네요. 그거 충분히 이해돼요.
-근데 그걸 매일 도달했는지로 재려고 하면 오히려 매일 흔들릴 수 있어요.
-그래서 지금부터는 '그런 사람인지'가 아니라 '오늘 이 행동을 했는지'만 보려고 해요.`;
+async function summarizeMotive(identityMotive: string) {
+  try {
+    const response = await fetch("/api/elastic/summarize-motive", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ identity_motive: identityMotive }),
+    });
+    if (!response.ok) throw new Error("Failed");
+    const data = (await response.json()) as { summary: string };
+    return data.summary;
+  } catch {
+    return identityMotive.length > 24 ? `${identityMotive.slice(0, 24)}...` : identityMotive;
+  }
 }
 
-function summarizeMotive(value: string) {
-  const trimmed = value.trim();
-  if (trimmed.length <= 34) {
-    return trimmed;
-  }
-  return `${trimmed.slice(0, 34)}...`;
+function createTransitionText(motiveSummary: string) {
+  return `그러니까 ${motiveSummary}이 진짜 이유시네요. 그거 충분히 이해돼요.
+근데 그걸 매일 도달했는지로 재려고 하면 오히려 매일 흔들릴 수 있어요.
+그래서 지금부터는 '그런 사람인지'가 아니라 '오늘 이 행동을 했는지'만 보려고 해요.`;
 }
 
 function createDailyNote(status: CheckInStatus, memo: string) {
   const statusText = status === "not_done" ? "안함" : status === "no_response" ? "무응답" : status;
   return memo ? `${statusText}: ${memo}` : statusText;
+}
+
+function mapProfileToData(profile: ElasticProfile): OnboardingData {
+  return {
+    habitName: profile.habit_name,
+    identityMotive: profile.identity_motive,
+    motiveSummary: profile.motive_summary ?? "",
+    recentFailureDate: profile.recent_failure_date ?? "",
+    preBreakdownFeeling: profile.pre_breakdown_feeling ?? "",
+    actualBreakdownBehavior: profile.actual_breakdown_behavior ?? "",
+    recoveryMethod: profile.recovery_method ?? "",
+    miniTask: profile.mini_task,
+    plusTask: profile.plus_task,
+    eliteTask: profile.elite_task,
+    monthlyVision: profile.monthly_vision,
+  };
+}
+
+function createMonthRecords(checkIns: ElasticCheckIn[]): DailyRecord[] {
+  const byDay = new Map(checkIns.map((checkIn) => [Number(checkIn.checkin_date.slice(-2)), checkIn.result]));
+  return Array.from({ length: 31 }, (_, index) => {
+    const day = index + 1;
+    return { day, status: byDay.get(day) ?? "open" };
+  });
+}
+
+function countRecentMiniFailures(checkIns: ElasticCheckIn[]) {
+  let count = 0;
+  for (const checkIn of [...checkIns].sort((a, b) => b.checkin_date.localeCompare(a.checkin_date))) {
+    if (checkIn.result === "not_done") count += 1;
+    else break;
+  }
+  return count;
 }
