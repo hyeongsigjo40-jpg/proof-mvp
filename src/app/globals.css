@@ -1078,6 +1078,27 @@ blockquote {
   font-size: 13px;
 }
 
+.goal-empty-line {
+  background: var(--line);
+  border-radius: 2px;
+  display: block;
+  height: 2px;
+  width: 48px;
+}
+
+.goal-cursor {
+  animation: blink 1s step-end infinite;
+  color: var(--primary);
+  font-weight: 300;
+  margin-left: 1px;
+  opacity: 1;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
 .smart-sentence {
   background: var(--primary);
   border-radius: 8px;

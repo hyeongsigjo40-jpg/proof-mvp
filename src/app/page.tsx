@@ -1251,11 +1251,40 @@ function getBonusItems(levelCounts: { mini: number; plus: number; elite: number;
   return bonuses;
 }
 
+function useTypewriter(value: string, speed = 30) {
+  const [displayed, setDisplayed] = useState(value);
+  const [done, setDone] = useState(true);
+  const prev = useRef(value);
+
+  useEffect(() => {
+    if (value === prev.current) return;
+    prev.current = value;
+    if (!value) { setDisplayed(""); setDone(true); return; }
+    setDisplayed("");
+    setDone(false);
+    let i = 0;
+    const id = setInterval(() => {
+      i++;
+      setDisplayed(value.slice(0, i));
+      if (i >= value.length) { clearInterval(id); setDone(true); }
+    }, speed);
+    return () => clearInterval(id);
+  }, [value, speed]);
+
+  return { displayed, done };
+}
+
+function TypedField({ value, empty, isIdentity = false }: { value: string; empty: React.ReactNode; isIdentity?: boolean }) {
+  const { displayed, done } = useTypewriter(value, isIdentity ? 20 : 30);
+  if (!value) return <>{empty}</>;
+  return <>{displayed}{!done && <span className="goal-cursor">|</span>}</>;
+}
+
 function GoalPanel({ data, goalData, step }: { data: OnboardingData; goalData: GoalData; step: OnboardingStep }) {
-  const goalFields: { label: string; value: string; active: boolean }[] = [
+  const goalFields: { label: string; value: string; active: boolean; isIdentity?: boolean }[] = [
     { label: "삶의 영역", value: goalData.lifeArea, active: step === "goal_area" },
     { label: "바꾸고 싶은 이유", value: goalData.whyChange, active: step === "goal_why" },
-    { label: "정체성 문장", value: goalData.identityStatement, active: step === "goal_identity" },
+    { label: "정체성 문장", value: goalData.identityStatement, active: step === "goal_identity", isIdentity: true },
   ];
 
   const habitFields: { label: string; value: string; active: boolean; placeholder: string }[] = [
@@ -1280,9 +1309,15 @@ function GoalPanel({ data, goalData, step }: { data: OnboardingData; goalData: G
       <div className="goal-template">
         <p className="goal-section-label">목표 &amp; 정체성</p>
         {goalFields.map((field) => (
-          <div key={field.label} className={`goal-field${field.active ? " goal-field-active" : ""}${field.label === "정체성 문장" ? " goal-field-identity" : ""}`}>
+          <div key={field.label} className={`goal-field${field.active ? " goal-field-active" : ""}${field.isIdentity ? " goal-field-identity" : ""}`}>
             <span className="goal-field-label">{field.label}</span>
-            <p className="goal-field-value">{field.value || "대화로 채워집니다"}</p>
+            <p className="goal-field-value">
+              <TypedField
+                value={field.value}
+                isIdentity={field.isIdentity}
+                empty={<span className="goal-empty-line" />}
+              />
+            </p>
           </div>
         ))}
       </div>
@@ -1293,14 +1328,21 @@ function GoalPanel({ data, goalData, step }: { data: OnboardingData; goalData: G
           {habitFields.map((field) => (
             <div key={field.label} className={`goal-field habit-field${field.active ? " goal-field-active" : ""}`}>
               <span className="goal-field-label">{field.label}</span>
-              <p className="goal-field-value">{field.value || <span className="goal-placeholder">{field.placeholder}</span>}</p>
+              <p className="goal-field-value">
+                <TypedField
+                  value={field.value}
+                  empty={<span className="goal-placeholder">{field.placeholder}</span>}
+                />
+              </p>
             </div>
           ))}
         </div>
         {(smartSentence || isHabitComplete) && (
           <div className="smart-sentence">
             <span className="goal-field-label">습관 목표 문장</span>
-            <p>{smartSentence || "대화로 완성됩니다"}</p>
+            <p>
+              <TypedField value={smartSentence} empty="대화로 완성됩니다" isIdentity />
+            </p>
           </div>
         )}
       </div>
