@@ -1044,7 +1044,59 @@ blockquote {
 
 .goal-template {
   display: grid;
-  gap: 14px;
+  gap: 10px;
+}
+
+.goal-habit-template {
+  margin-top: 4px;
+}
+
+.goal-section-label {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.habit-fields-grid {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: 1fr 1fr;
+}
+
+.habit-field {
+  padding: 10px 12px;
+}
+
+.habit-field .goal-field-value {
+  font-size: 14px;
+}
+
+.goal-placeholder {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.smart-sentence {
+  background: var(--primary);
+  border-radius: 8px;
+  display: grid;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 14px 16px;
+}
+
+.smart-sentence .goal-field-label {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.smart-sentence p {
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.6;
+  margin: 0;
 }
 
 .goal-field {

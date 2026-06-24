@@ -23,19 +23,15 @@ type OnboardingStep =
   | "goal_area"
   | "goal_why"
   | "goal_identity"
+  | "habit_action"
+  | "habit_period"
+  | "habit_frequency"
+  | "habit_when"
+  | "habit_amount"
   | "goal_complete"
-  | "habit"
-  | "motive"
-  | "transition"
-  | "failure_date"
-  | "feeling"
-  | "behavior"
-  | "recovery"
-  | "elastic_intro"
   | "mini"
   | "plus"
   | "elite"
-  | "vision"
   | "complete";
 
 type GoalData = {
@@ -53,17 +49,14 @@ type OnboardingData = {
   lifeArea: string;
   whyChange: string;
   goalIdentityStatement: string;
-  habitName: string;
-  identityMotive: string;
-  motiveSummary: string;
-  recentFailureDate: string;
-  preBreakdownFeeling: string;
-  actualBreakdownBehavior: string;
-  recoveryMethod: string;
+  habitAction: string;
+  habitPeriod: string;
+  habitFrequency: string;
+  habitWhen: string;
+  habitAmount: string;
   miniTask: string;
   plusTask: string;
   eliteTask: string;
-  monthlyVision: string;
 };
 
 type OnboardingControllerResult = {
@@ -101,17 +94,14 @@ const emptyOnboarding: OnboardingData = {
   lifeArea: "",
   whyChange: "",
   goalIdentityStatement: "",
-  habitName: "",
-  identityMotive: "",
-  motiveSummary: "",
-  recentFailureDate: "",
-  preBreakdownFeeling: "",
-  actualBreakdownBehavior: "",
-  recoveryMethod: "",
+  habitAction: "",
+  habitPeriod: "",
+  habitFrequency: "",
+  habitWhen: "",
+  habitAmount: "",
   miniTask: "",
   plusTask: "",
   eliteTask: "",
-  monthlyVision: "",
 };
 
 const emptyGoalData: GoalData = { lifeArea: "", whyChange: "", identityStatement: "" };
@@ -130,18 +120,8 @@ const statusMeta = {
   open: { label: "열림", icon: PencilLine },
 };
 
-const ELASTIC_HABIT_EXPLANATION = `Elastic Habit은 하루 상태에 따라 목표 수준을 유연하게 바꿀 수 있는 습관 방식이에요.
-
-일반적인 습관 앱은 '했다/못했다' 이분법이라 한번 못하면 자책이 생기고, 자책이 쌓이면 포기로 이어지죠. Elastic Habit은 달라요.
-
-Mini, Plus, Elite 세 단계를 미리 정해두면 이렇게 됩니다.
-• 피곤하거나 바쁜 날 → Mini만 해도 '완료'
-• 보통 날 → Plus
-• 에너지가 넘치는 날 → Elite까지
-
-어떤 날도 실패가 없고, 작은 기록이 매일 이어져요. 습관이 끊기지 않는 이유가 바로 여기 있습니다.
-
-아래 버튼을 누르면 세 단계를 직접 설정합니다.`;
+const MINI_OPENING = (habitAction: string) =>
+  `습관 목표가 완성됐어요. 이제 Elastic Habit의 세 단계를 설정할게요.\n\nMini는 피곤하거나 바쁜 날에도 할 수 있는 가장 작은 행동이에요. "${habitAction}"을 기준으로 Mini는 어떻게 설정할까요?\n예: 1문제만 풀기, 5분만 켜놓기`;
 
 const initialMessages: Message[] = [];
 const DEBUG_SESSION_KEY = "proof-elastic-debug-session";
@@ -258,10 +238,10 @@ export default function Home() {
     setMessages((current) => [...current, { role: "user", text }]);
     setInput("");
 
-    if (step === "goal_area" || step === "goal_why" || step === "goal_identity" || step === "goal_complete") {
-      await advanceGoal(text);
-    } else {
+    if (step === "mini" || step === "plus" || step === "elite") {
       await advanceOnboarding(text);
+    } else {
+      await advanceGoal(text);
     }
   }
 
@@ -278,20 +258,12 @@ export default function Home() {
 
     if (result.should_advance) {
       setStep(result.next_step);
-      if (result.next_step === "goal_complete") {
-        setGoalData({
-          lifeArea: nextData.lifeArea,
-          whyChange: nextData.whyChange,
-          identityStatement: nextData.goalIdentityStatement,
-        });
-      } else {
-        setGoalData((d) => ({
-          lifeArea: nextData.lifeArea || d.lifeArea,
-          whyChange: nextData.whyChange || d.whyChange,
-          identityStatement: nextData.goalIdentityStatement || d.identityStatement,
-        }));
-      }
     }
+    setGoalData({
+      lifeArea: nextData.lifeArea || goalData.lifeArea,
+      whyChange: nextData.whyChange || goalData.whyChange,
+      identityStatement: nextData.goalIdentityStatement || goalData.identityStatement,
+    });
     setPending(false);
   }
 
@@ -306,21 +278,8 @@ export default function Home() {
 
   async function handleContinueButton() {
     if (step === "goal_complete") {
-      setPending(true);
-      setStep("habit");
-      const opening = await runOnboardingController("habit", "", data);
-      assistant(opening.final.reply);
-      setPending(false);
-    } else if (step === "transition") {
-      setPending(true);
-      const currentData = { ...data };
-      const turn = await runOnboardingController("transition", "", currentData);
-      recordDebugEvent("transition", "[continue]", turn);
-      await applyOnboardingResult(turn.final, currentData);
-      setPending(false);
-    } else if (step === "elastic_intro") {
       setStep("mini");
-      assistant(`${data.habitName || "이 습관"}의 Mini부터 정해볼게요. Mini는 피곤하거나 바쁜 날에도 할 수 있는 가장 작은 행동이에요. 어떻게 설정할까요?`);
+      assistant(MINI_OPENING(data.habitAction || "이 습관"));
     }
   }
 
@@ -350,22 +309,6 @@ export default function Home() {
 
     setStep(result.next_step);
 
-    if (result.next_step === "motive" && nextData.whyChange) {
-      const motiveTurn = await runOnboardingController("motive", nextData.whyChange, nextData);
-      const motiveResult = motiveTurn.final;
-      const afterMotive = applyOnboardingPatch(nextData, motiveResult.data_patch);
-      setData(afterMotive);
-      assistant(motiveResult.reply);
-      if (motiveResult.should_advance) {
-        setStep(motiveResult.next_step);
-        if (motiveResult.next_step === "elastic_intro") assistant(ELASTIC_HABIT_EXPLANATION);
-      }
-      return;
-    }
-
-    if (result.next_step === "elastic_intro") {
-      assistant(ELASTIC_HABIT_EXPLANATION);
-    }
     if (result.next_step === "complete") {
       setNextMini(nextData.miniTask);
       setNextPlus(nextData.plusTask);
@@ -441,17 +384,22 @@ export default function Home() {
       life_area: nextData.lifeArea || null,
       why_change: nextData.whyChange || null,
       identity_statement: nextData.goalIdentityStatement || null,
-      habit_name: nextData.habitName,
-      identity_motive: nextData.identityMotive,
-      motive_summary: nextData.motiveSummary,
-      recent_failure_date: nextData.recentFailureDate || null,
-      pre_breakdown_feeling: nextData.preBreakdownFeeling || null,
-      actual_breakdown_behavior: nextData.actualBreakdownBehavior || null,
-      recovery_method: nextData.recoveryMethod || null,
+      habit_name: buildSmartSentence(nextData) || nextData.habitAction,
+      habit_action: nextData.habitAction || null,
+      habit_period: nextData.habitPeriod || null,
+      habit_frequency: nextData.habitFrequency || null,
+      habit_when: nextData.habitWhen || null,
+      habit_amount: nextData.habitAmount || null,
+      identity_motive: "",
+      motive_summary: null,
+      recent_failure_date: null,
+      pre_breakdown_feeling: null,
+      actual_breakdown_behavior: null,
+      recovery_method: null,
       mini_task: nextData.miniTask,
       plus_task: nextData.plusTask,
       elite_task: nextData.eliteTask,
-      monthly_vision: nextData.monthlyVision,
+      monthly_vision: null,
       onboarding_completed_at: new Date().toISOString(),
     });
   }
@@ -486,12 +434,21 @@ export default function Home() {
   }
 
   async function skipGoalPhase() {
+    const skipped = {
+      ...data,
+      lifeArea: "[스킵]",
+      whyChange: "[스킵]",
+      goalIdentityStatement: "[스킵]",
+      habitAction: "[스킵]",
+      habitPeriod: "[스킵]",
+      habitFrequency: "[스킵]",
+      habitWhen: "[스킵]",
+      habitAmount: "[스킵]",
+    };
+    setData(skipped);
     setGoalData({ lifeArea: "[스킵]", whyChange: "[스킵]", identityStatement: "[스킵]" });
-    setStep("habit");
-    setPending(true);
-    const opening = await runOnboardingController("habit", "", data);
-    assistant(opening.final.reply);
-    setPending(false);
+    setStep("mini");
+    assistant(MINI_OPENING("이 습관"));
   }
 
   async function resetCurrentDebugSession() {
@@ -525,18 +482,18 @@ export default function Home() {
 
   if (loading) return <LoadingState />;
 
-  const isGoalPhase = step === "goal_area" || step === "goal_why" || step === "goal_identity" || step === "goal_complete";
+  const isGoalPhase = step !== "mini" && step !== "plus" && step !== "elite" && step !== "complete";
 
   return (
     <main className="tracker-workspace">
       {isGoalPhase ? (
-        <GoalPanel goalData={goalData} step={step} />
+        <GoalPanel data={data} goalData={goalData} step={step} />
       ) : (
       <section className="tracker-panel" aria-label="Elastic habit tracker">
         <div className="tracker-header">
           <div>
             <p className="eyebrow">Elastic Habit Tracker</p>
-            <h1>{data.habitName || "습관 설정 중"}</h1>
+            <h1>{data.habitAction || "습관 설정 중"}</h1>
           </div>
           <div className="tracker-score">
             <strong>{completedCount}</strong>
@@ -580,14 +537,6 @@ export default function Home() {
             )}
           </section>
         )}
-
-        <section className="tracker-band goal-band">
-          <div className="band-title">
-            <Target size={18} aria-hidden="true" />
-            <span>한 달 뒤 관찰 가능한 변화</span>
-          </div>
-          <p>{data.monthlyVision || "온보딩 마지막 답변이 끝나면 이곳에 고정됩니다."}</p>
-        </section>
 
         <div className="elastic-grid">
           <section className="tracker-tile level-mini">
@@ -774,9 +723,9 @@ export default function Home() {
 }
 
 const ALL_STEPS: OnboardingStep[] = [
-  "goal_area", "goal_why", "goal_identity", "goal_complete",
-  "habit", "motive", "transition", "failure_date", "feeling",
-  "behavior", "recovery", "elastic_intro", "mini", "plus", "elite", "vision", "complete",
+  "goal_area", "goal_why", "goal_identity",
+  "habit_action", "habit_period", "habit_frequency", "habit_when", "habit_amount",
+  "goal_complete", "mini", "plus", "elite", "complete",
 ];
 
 const INTENT_COLOR: Record<string, string> = {
@@ -822,12 +771,14 @@ function OnboardingDebugPanel({
     ["정체성 문장", goalData.identityStatement],
   ];
   const habitFields: [string, string][] = [
-    ["habitName", data.habitName],
-    ["miniTask", data.miniTask],
-    ["plusTask", data.plusTask],
-    ["eliteTask", data.eliteTask],
-    ["monthlyVision", data.monthlyVision],
-    ["recoveryMethod", data.recoveryMethod],
+    ["행동", data.habitAction],
+    ["기간", data.habitPeriod],
+    ["빈도", data.habitFrequency],
+    ["언제", data.habitWhen],
+    ["얼마나", data.habitAmount],
+    ["Mini", data.miniTask],
+    ["Plus", data.plusTask],
+    ["Elite", data.eliteTask],
   ];
 
   return (
@@ -850,14 +801,14 @@ function OnboardingDebugPanel({
             title={s}
             type="button"
           >
-            {s.replace("goal_", "g:").replace("failure_date", "fail").replace("elastic_intro", "intro")}
+            {s.replace("goal_", "g:").replace("habit_", "h:")}
           </button>
         ))}
       </div>
 
       {/* Quick actions */}
       <div className="debug-actions">
-        <button className="debug-btn-accent" disabled={pending} onClick={onSkipGoal} type="button">목표 스킵→habit</button>
+        <button className="debug-btn-accent" disabled={pending} onClick={onSkipGoal} type="button">전체 스킵→mini</button>
         <button disabled={pending} onClick={onResetConversation} type="button">대화 초기화</button>
         <button disabled={pending} onClick={onResetSession} type="button">세션 초기화</button>
         <button disabled={pending} onClick={onNewSession} type="button">새 세션</button>
@@ -958,34 +909,8 @@ function OnboardingComposer({
 
   if (step === "goal_complete") {
     return (
-      <div className="goal-complete-composer">
-        <form className="chat-composer" onSubmit={onSubmit}>
-          <textarea
-            aria-label="정체성 문장 수정"
-            disabled={pending}
-            onChange={(event) => setInput(event.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="문장이 마음에 들지 않으면 여기서 수정해주세요…"
-            ref={textareaRef}
-            rows={1}
-            value={input}
-          />
-          <button aria-label="수정 전송" disabled={pending || !input.trim()} type="submit">
-            수정
-          </button>
-        </form>
-        <button className="primary-button" disabled={pending} onClick={onContinue} type="button">
-          {pending ? "준비하는 중…" : "습관 트래커로 넘어갈게요"}
-        </button>
-      </div>
-    );
-  }
-
-  if (step === "transition" || step === "elastic_intro") {
-    const label = step === "transition" ? "최근 실패 구체화로" : "Mini / Plus / Elite 설정하기";
-    return (
       <button className="primary-button" disabled={pending} onClick={onContinue} type="button">
-        {pending ? "준비하는 중…" : label}
+        {pending ? "준비하는 중…" : "습관 트래커로 넘어갈게요"}
       </button>
     );
   }
@@ -1043,7 +968,7 @@ function DailyCheckIn({
   return (
     <div className="daily-panel">
       <section className="daily-card">
-        <strong>오늘 {data.habitName} 중 뭘 했어요?</strong>
+        <strong>오늘 {data.habitAction || "습관"} 중 뭘 했어요?</strong>
         <div className="checkin-buttons">
           <button className={selectedCheckIn === "mini" ? "selected mini" : "mini"} onClick={() => onCheckIn("mini")} type="button">
             Mini
@@ -1133,69 +1058,24 @@ function normalizeOnboardingResult(
   _data: OnboardingData,
   result: OnboardingControllerResult,
 ) {
-  return {
-    ...result,
-    data_patch: result.data_patch.map((item) =>
-      item.field === "habitName" ? { ...item, value: compactHabitName(item.value) } : item,
-    ),
-  };
+  return result;
 }
 
 function fallbackOnboardingTurn(
   currentStep: OnboardingStep,
   latestUserAnswer: string,
-  data: OnboardingData,
+  _data: OnboardingData,
 ): OnboardingControllerResult {
   const text = latestUserAnswer.trim();
-  if (!text && currentStep === "habit") {
-    return stayOnboarding(currentStep, {}, "지금 이루고 싶은 습관이 뭔가요?");
-  }
-  if (!text && currentStep === "transition") {
-    return advanceOnboardingStep(currentStep, {}, "좋아요. 최근에 못 지킨 날이나 상황이 언제였어요?");
-  }
-  if (looksLikeOnboardingQuestion(text)) {
-    return stayOnboarding(currentStep, {}, fallbackOnboardingHelp(currentStep, data));
-  }
-
   switch (currentStep) {
-    case "habit":
-      return advanceOnboardingStep(currentStep, { habitName: compactHabitName(text) }, "좋아요. 이 습관을 왜 만들고 싶으세요?");
-    case "motive": {
-      const motiveSummary = compactMotiveSummary(text);
-      return advanceOnboardingStep(
-        currentStep,
-        { identityMotive: text, motiveSummary },
-        `그러니까 ${motiveSummary}이 중요한 이유네요. 이제 결과가 아니라 오늘 할 행동으로 좁혀볼게요.`,
-      );
-    }
-    case "transition":
-      return advanceOnboardingStep(currentStep, {}, "최근에 못 지킨 날이나 상황이 언제였어요?");
-    case "failure_date":
-      return advanceOnboardingStep(currentStep, { recentFailureDate: text }, "무너지기 직전, 기분이나 몸 상태가 어땠어요?");
-    case "feeling":
-      return advanceOnboardingStep(currentStep, { preBreakdownFeeling: text }, "그때 실제로 뭘 했어요?");
-    case "behavior":
-      return advanceOnboardingStep(currentStep, { actualBreakdownBehavior: text }, "그 다음엔 보통 어떻게 다시 시작해요?");
-    case "recovery":
-      return advanceOnboardingStep(currentStep, { recoveryMethod: text }, "알겠어요, 저장했어요.");
     case "mini":
-      return advanceOnboardingStep(currentStep, { miniTask: text }, "좋아요. Plus, 즉 보통 단위는 무엇으로 할까요?");
+      return advanceOnboardingStep(currentStep, { miniTask: text }, "좋아요. Plus는 보통 날의 기본 성공 단위예요. 어떻게 설정할까요?");
     case "plus":
-      return advanceOnboardingStep(currentStep, { plusTask: text }, "좋아요. Elite, 즉 도전 단위는 무엇으로 할까요?");
+      return advanceOnboardingStep(currentStep, { plusTask: text }, "좋아요. Elite는 여유 있는 날 도전하는 단위예요. 어떻게 할까요?");
     case "elite":
-      return advanceOnboardingStep(
-        currentStep,
-        { eliteTask: text },
-        "이게 잘 되면 한 달 뒤 뭐가 달라져 있을까요? 관찰 가능한 장면으로 적어주세요.",
-      );
-    case "vision":
-      return advanceOnboardingStep(
-        currentStep,
-        { monthlyVision: text },
-        "저장했어요. 이제 일상 화면에는 한 달 뒤 변화와 Mini/Plus/Elite만 두고 볼게요.",
-      );
+      return advanceOnboardingStep(currentStep, { eliteTask: text }, "완성됐어요. 이제 매일 체크인을 시작해볼게요.");
     default:
-      return stayOnboarding(currentStep, {}, "이미 온보딩이 완료됐어요.");
+      return stayOnboarding(currentStep, {}, "조금 더 구체적으로 말씀해주세요.");
   }
 }
 
@@ -1242,62 +1122,22 @@ function toOnboardingPatch(dataPatch: Partial<OnboardingData>): OnboardingContro
 }
 
 function getNextOnboardingStep(currentStep: OnboardingStep): OnboardingStep {
-  const steps: OnboardingStep[] = [
-    "goal_area",
-    "goal_why",
-    "goal_identity",
-    "goal_complete",
-    "habit",
-    "motive",
-    "transition",
-    "failure_date",
-    "feeling",
-    "behavior",
-    "recovery",
-    "elastic_intro",
-    "mini",
-    "plus",
-    "elite",
-    "vision",
-    "complete",
-  ];
+  const steps: OnboardingStep[] = ALL_STEPS;
   const index = steps.indexOf(currentStep);
   return steps[Math.min(index + 1, steps.length - 1)] ?? currentStep;
 }
 
-function looksLikeOnboardingQuestion(text: string) {
-  return /[?？]|뭐|뭘|무엇|뭔지|어떻게|추천|좋을 것|좋을까|정해줘|골라줘|예시|괜찮|모르겠|잘\s*모르|막막|고민/.test(
-    text,
-  );
-}
-
-function fallbackOnboardingHelp(step: OnboardingStep, data: OnboardingData) {
-  if (step === "habit") {
-    return "괜찮아요. 지금은 딱 하나만 고르면 됩니다. 데모데이 준비라면 '평일 오전 9시 30분부터 12시 30분까지 문제정의와 기획 작업하기' 같은 습관이 좋아 보여요. 이 방향으로 잡아볼까요?";
-  }
-  if (step === "recovery") {
-    return "지금 상황이라면 '25분만 다시 켜기'처럼 회복 방법을 아주 작게 잡는 게 좋아 보여요. 예를 들면 웹툰을 닫고 타이머 25분을 켠 뒤 문제정의 문서 첫 줄만 여는 방식이요. 이런 식으로 다시 시작한다고 저장할까요?";
-  }
-  if (step === "mini") {
-    return "이 경우 Mini는 부담 없이 시작 가능한 25분 한 세트가 좋아 보여요. 예를 들면 '오전 9시 30분에 문제정의 문서 25분 열기'처럼요. 이걸 Mini로 할까요?";
-  }
-  if (step === "plus") {
-    return "Plus는 원래 목표에 가까운 기본 성공 단위가 좋아요. 예를 들면 '오전 9시 30분부터 12시 30분까지 고인지 작업 2세트 이상'처럼 잡을 수 있어요.";
-  }
-  if (step === "elite") {
-    return "Elite는 데모데이 성과에 직접 닿는 산출물까지 포함하면 좋아요. 예를 들면 '3시간 고인지 작업 후 결제 전환 가설 1개를 검증한다'처럼요.";
-  }
-  return `${data.habitName || "이 단계"}에 대해 조금 더 구체적으로 잡아볼게요. 답변으로 저장할 문장을 말해주면 다음 단계로 넘어갈게요.`;
-}
-
-function compactHabitName(value: string) {
-  if (value.includes("고인지")) return "평일 오전 고인지 작업";
-  return value.length > 28 ? `${value.slice(0, 28)}...` : value;
-}
-
-function compactMotiveSummary(value: string) {
-  if (value.includes("데모데이") || value.includes("결제")) return "데모데이 성과와 B2C 결제 10건";
-  return value.length > 24 ? `${value.slice(0, 24)}...` : value;
+function buildSmartSentence(data: OnboardingData): string {
+  const { habitPeriod, habitFrequency, habitWhen, habitAction, habitAmount } = data;
+  if (!habitAction) return "";
+  const parts: string[] = [];
+  if (habitPeriod) parts.push(`${habitPeriod} 동안`);
+  if (habitFrequency) parts.push(habitFrequency);
+  if (habitWhen) parts.push(`${habitWhen}에`);
+  parts.push(habitAction + "을");
+  if (habitAmount) parts.push(`${habitAmount} 한다`);
+  else parts.push("한다");
+  return `나는 ${parts.join(", ")}.`;
 }
 
 function createDailyNote(status: CheckInStatus, memo: string) {
@@ -1310,17 +1150,14 @@ function mapProfileToData(profile: ElasticProfile): OnboardingData {
     lifeArea: profile.life_area ?? "",
     whyChange: profile.why_change ?? "",
     goalIdentityStatement: profile.identity_statement ?? "",
-    habitName: profile.habit_name,
-    identityMotive: profile.identity_motive,
-    motiveSummary: profile.motive_summary ?? "",
-    recentFailureDate: profile.recent_failure_date ?? "",
-    preBreakdownFeeling: profile.pre_breakdown_feeling ?? "",
-    actualBreakdownBehavior: profile.actual_breakdown_behavior ?? "",
-    recoveryMethod: profile.recovery_method ?? "",
+    habitAction: profile.habit_action ?? profile.habit_name ?? "",
+    habitPeriod: profile.habit_period ?? "",
+    habitFrequency: profile.habit_frequency ?? "",
+    habitWhen: profile.habit_when ?? "",
+    habitAmount: profile.habit_amount ?? "",
     miniTask: profile.mini_task,
     plusTask: profile.plus_task,
     eliteTask: profile.elite_task,
-    monthlyVision: profile.monthly_vision,
   };
 }
 
@@ -1352,11 +1189,11 @@ async function createContextualReply(
         today: todayKey(),
         timezone: "Asia/Seoul",
         profile: {
-          habit_name: data.habitName,
+          habit_name: buildSmartSentence(data) || data.habitAction,
           mini_task: data.miniTask,
           plus_task: data.plusTask,
           elite_task: data.eliteTask,
-          monthly_vision: data.monthlyVision,
+          monthly_vision: "",
         },
         recent_checkins: checkIns.slice(-10).map((checkIn) => ({
           checkin_date: checkIn.checkin_date,
@@ -1408,55 +1245,58 @@ function getBonusItems(levelCounts: { mini: number; plus: number; elite: number;
   return bonuses;
 }
 
-async function fetchIdentityStatement(lifeArea: string, whyChange: string, visionText: string): Promise<string> {
-  try {
-    const response = await fetch("/api/elastic/generate-identity", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ life_area: lifeArea, why_change: whyChange, vision_text: visionText }),
-    });
-    if (!response.ok) throw new Error("Failed");
-    const body = (await response.json()) as { statement: string };
-    return body.statement;
-  } catch {
-    return `나는 ${lifeArea || "이 영역"}에서 매일 작은 증거를 쌓아가는 사람이다.`;
-  }
-}
-
-function GoalPanel({ goalData, step }: { goalData: GoalData; step: OnboardingStep }) {
-  const fields: { label: string; value: string; active: boolean; isIdentity?: boolean }[] = [
-    {
-      label: "삶의 영역",
-      value: goalData.lifeArea,
-      active: step === "goal_area",
-    },
-    {
-      label: "바꾸고 싶은 이유",
-      value: goalData.whyChange,
-      active: step === "goal_why",
-    },
-    {
-      label: "정체성 문장",
-      value: goalData.identityStatement,
-      active: step === "goal_identity" || step === "goal_complete",
-      isIdentity: true,
-    },
+function GoalPanel({ data, goalData, step }: { data: OnboardingData; goalData: GoalData; step: OnboardingStep }) {
+  const goalFields: { label: string; value: string; active: boolean }[] = [
+    { label: "삶의 영역", value: goalData.lifeArea, active: step === "goal_area" },
+    { label: "바꾸고 싶은 이유", value: goalData.whyChange, active: step === "goal_why" },
+    { label: "정체성 문장", value: goalData.identityStatement, active: step === "goal_identity" },
   ];
+
+  const habitFields: { label: string; value: string; active: boolean; placeholder: string }[] = [
+    { label: "어떤 행동", value: data.habitAction, active: step === "habit_action", placeholder: "예: 토익 LC 공부" },
+    { label: "기간", value: data.habitPeriod, active: step === "habit_period", placeholder: "예: 4주" },
+    { label: "빈도", value: data.habitFrequency, active: step === "habit_frequency", placeholder: "예: 주 5회" },
+    { label: "언제", value: data.habitWhen, active: step === "habit_when", placeholder: "예: 저녁 식사 후" },
+    { label: "얼마나", value: data.habitAmount, active: step === "habit_amount", placeholder: "예: 10분" },
+  ];
+
+  const smartSentence = buildSmartSentence(data);
+  const isHabitComplete = step === "goal_complete";
 
   return (
     <section className="goal-panel" aria-label="목표 설정">
       <div className="goal-panel-header">
         <p className="eyebrow">목표 설정</p>
-        <h1>내 삶의 기준</h1>
-        <p className="goal-panel-desc">목표를 구체화하면 매일의 행동이 더 선명해집니다.</p>
+        <h1>내 목표를 행동으로 바꾸기</h1>
+        <p className="goal-panel-desc">원하는 변화가 매일의 작은 행동으로 이어지도록 정리해요.</p>
       </div>
+
       <div className="goal-template">
-        {fields.map((field) => (
-          <div key={field.label} className={`goal-field${field.active ? " goal-field-active" : ""}${field.isIdentity ? " goal-field-identity" : ""}`}>
+        <p className="goal-section-label">목표 &amp; 정체성</p>
+        {goalFields.map((field) => (
+          <div key={field.label} className={`goal-field${field.active ? " goal-field-active" : ""}${field.label === "정체성 문장" ? " goal-field-identity" : ""}`}>
             <span className="goal-field-label">{field.label}</span>
             <p className="goal-field-value">{field.value || "대화로 채워집니다"}</p>
           </div>
         ))}
+      </div>
+
+      <div className="goal-template goal-habit-template">
+        <p className="goal-section-label">습관 목표</p>
+        <div className="habit-fields-grid">
+          {habitFields.map((field) => (
+            <div key={field.label} className={`goal-field habit-field${field.active ? " goal-field-active" : ""}`}>
+              <span className="goal-field-label">{field.label}</span>
+              <p className="goal-field-value">{field.value || <span className="goal-placeholder">{field.placeholder}</span>}</p>
+            </div>
+          ))}
+        </div>
+        {(smartSentence || isHabitComplete) && (
+          <div className="smart-sentence">
+            <span className="goal-field-label">습관 목표 문장</span>
+            <p>{smartSentence || "대화로 완성됩니다"}</p>
+          </div>
+        )}
       </div>
     </section>
   );

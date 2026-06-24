@@ -8,6 +8,11 @@ export type ElasticProfile = {
   why_change: string | null;
   identity_statement: string | null;
   habit_name: string;
+  habit_action: string | null;
+  habit_period: string | null;
+  habit_frequency: string | null;
+  habit_when: string | null;
+  habit_amount: string | null;
   identity_motive: string;
   motive_summary: string | null;
   recent_failure_date: string | null;
@@ -17,7 +22,7 @@ export type ElasticProfile = {
   mini_task: string;
   plus_task: string;
   elite_task: string;
-  monthly_vision: string;
+  monthly_vision: string | null;
   onboarding_completed_at: string | null;
   updated_at: string;
 };
