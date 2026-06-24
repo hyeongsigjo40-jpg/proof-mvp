@@ -257,7 +257,7 @@ export default function Home() {
     setMessages((current) => [...current, { role: "user", text }]);
     setInput("");
 
-    if (step === "goal_area" || step === "goal_why" || step === "goal_identity") {
+    if (step === "goal_area" || step === "goal_why" || step === "goal_identity" || step === "goal_complete") {
       await advanceGoal(text);
     } else {
       await advanceOnboarding(text);
@@ -902,13 +902,33 @@ function OnboardingComposer({
     event.currentTarget.form?.requestSubmit();
   }
 
-  if (step === "goal_complete" || step === "transition" || step === "elastic_intro") {
-    const label =
-      step === "goal_complete"
-        ? "습관 트래커로 넘어갈게요"
-        : step === "transition"
-          ? "최근 실패 구체화로"
-          : "Mini / Plus / Elite 설정하기";
+  if (step === "goal_complete") {
+    return (
+      <div className="goal-complete-composer">
+        <form className="chat-composer" onSubmit={onSubmit}>
+          <textarea
+            aria-label="정체성 문장 수정"
+            disabled={pending}
+            onChange={(event) => setInput(event.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="문장이 마음에 들지 않으면 여기서 수정해주세요…"
+            ref={textareaRef}
+            rows={1}
+            value={input}
+          />
+          <button aria-label="수정 전송" disabled={pending || !input.trim()} type="submit">
+            수정
+          </button>
+        </form>
+        <button className="primary-button" disabled={pending} onClick={onContinue} type="button">
+          {pending ? "준비하는 중…" : "습관 트래커로 넘어갈게요"}
+        </button>
+      </div>
+    );
+  }
+
+  if (step === "transition" || step === "elastic_intro") {
+    const label = step === "transition" ? "최근 실패 구체화로" : "Mini / Plus / Elite 설정하기";
     return (
       <button className="primary-button" disabled={pending} onClick={onContinue} type="button">
         {pending ? "준비하는 중…" : label}
