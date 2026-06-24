@@ -182,6 +182,7 @@ export default function Home() {
   );
   const [debugSessionId, setDebugSessionId] = useState(() => (debugEnabled ? readDebugSessionId() : ""));
   const [debugEvents, setDebugEvents] = useState<OnboardingDebugEvent[]>([]);
+  const [goalExpanded, setGoalExpanded] = useState(false);
   const chatLogRef = useRef<HTMLDivElement | null>(null);
   const storageScope = debugEnabled ? `debug:${debugSessionId}` : LIVE_ELASTIC_SCOPE;
 
@@ -525,7 +526,6 @@ export default function Home() {
   if (loading) return <LoadingState />;
 
   const isGoalPhase = step === "goal_area" || step === "goal_why" || step === "goal_identity" || step === "goal_complete";
-  const [goalExpanded, setGoalExpanded] = useState(false);
 
   return (
     <main className="tracker-workspace">
