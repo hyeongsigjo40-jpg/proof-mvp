@@ -751,6 +751,86 @@ blockquote {
   font-size: 24px;
 }
 
+.elastic-scorecard {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.scorecard-title {
+  background: #c9e8cb;
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 900;
+  letter-spacing: 0;
+  padding: 9px 12px;
+  text-align: center;
+}
+
+.scorecard-columns {
+  display: grid;
+  grid-template-columns: 1.1fr 1.5fr 1.2fr 1fr;
+}
+
+.scorecard-columns section {
+  border-right: 1px solid var(--line);
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 11px 12px;
+}
+
+.scorecard-columns section:last-child {
+  border-right: 0;
+}
+
+.scorecard-columns span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.scorecard-columns p,
+.scorecard-columns ul {
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.scorecard-columns ul {
+  display: grid;
+  gap: 4px;
+  padding-left: 18px;
+}
+
+.score-counts {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.score-counts strong {
+  border-radius: 6px;
+  color: #fff;
+  font-size: 12px;
+  padding: 7px 6px;
+  text-align: center;
+}
+
+.mini-count {
+  background: #35a942;
+}
+
+.plus-count {
+  background: #6a57e8;
+}
+
+.elite-count {
+  background: #ed3333;
+}
+
 .month-grid {
   align-self: end;
   display: grid;
@@ -1024,6 +1104,14 @@ blockquote {
   .month-grid {
     grid-template-columns: repeat(16, minmax(0, 1fr));
   }
+
+  .scorecard-columns {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .scorecard-columns section {
+    border-bottom: 1px solid var(--line);
+  }
 }
 
 @media (max-width: 980px) {
@@ -1097,8 +1185,13 @@ blockquote {
   }
 
   .elastic-grid,
-  .scorecard-strip {
+  .scorecard-strip,
+  .scorecard-columns {
     grid-template-columns: 1fr;
+  }
+
+  .scorecard-columns section {
+    border-right: 0;
   }
 
   .month-grid {

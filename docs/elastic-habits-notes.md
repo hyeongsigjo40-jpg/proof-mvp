@@ -30,6 +30,22 @@ The PDF is a month scorecard:
 - There is room for bonuses or extra credit
 - There are notes and recap/plans areas
 
+## Scorecard System
+
+Public summaries and the local PDF describe the base score as:
+
+`Mini + (Plus x 2) + (Elite x 3)`
+
+So a month can be reviewed with:
+
+- Mini count x 1
+- Plus count x 2
+- Elite count x 3
+- Base score = the sum of those weighted values
+- Bonus/extra credit = optional achievements or overachievement rewards
+
+Book summaries describe examples of bonuses such as many Elite wins or a no-miss period. For Proof V1, the score should be presented as private feedback, not as ranking, badges, or public competition.
+
 ## Proof Adaptation
 
 Proof should not copy the heavy gamification layer blindly because our product constraint avoids points, badges, and ranking. But the useful experience is strong:
@@ -47,3 +63,5 @@ For the current UX prototype:
 - The tracker uses Mini/Plus/Elite cards
 - The month grid uses 31 cells
 - Conversation can set habit, Mini/Plus/Elite actions, triggers, and today's mark
+- Scorecard shows transparent calculation: Mini count + Plus count x 2 + Elite count x 3
+- Bonus is shown as a quiet optional section rather than a gamified badge system

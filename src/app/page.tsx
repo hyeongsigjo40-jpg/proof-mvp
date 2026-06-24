@@ -143,6 +143,10 @@ export default function Home() {
   );
   const completedCount = levelCounts.plus + levelCounts.elite;
   const partialCount = levelCounts.mini;
+  const baseScore = levelCounts.mini + levelCounts.plus * 2 + levelCounts.elite * 3;
+  const bonusItems = getBonusItems(levelCounts);
+  const bonusScore = bonusItems.reduce((sum, item) => sum + item.points, 0);
+  const totalScore = baseScore + bonusScore;
 
   async function handleTextSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -402,6 +406,46 @@ export default function Home() {
           <div>
             <span>Elite / 완료</span>
             <strong>{levelCounts.elite}</strong>
+          </div>
+        </section>
+
+        <section className="elastic-scorecard" aria-label="월간 스코어카드">
+          <div className="scorecard-title">Scorecard</div>
+          <div className="scorecard-columns">
+            <section>
+              <span>Counts</span>
+              <div className="score-counts">
+                <strong className="mini-count">Mini {levelCounts.mini}</strong>
+                <strong className="plus-count">Plus {levelCounts.plus}</strong>
+                <strong className="elite-count">Elite {levelCounts.elite}</strong>
+              </div>
+            </section>
+            <section>
+              <span>Base Scores</span>
+              <p>
+                {levelCounts.mini} + ({levelCounts.plus} x 2) + ({levelCounts.elite} x 3) = <strong>{baseScore}</strong>
+              </p>
+            </section>
+            <section>
+              <span>Bonuses</span>
+              {bonusItems.length ? (
+                <ul>
+                  {bonusItems.map((item) => (
+                    <li key={item.label}>
+                      {item.label} +{item.points}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p>아직 없음</p>
+              )}
+            </section>
+            <section>
+              <span>Total Score</span>
+              <p>
+                {baseScore} + {bonusScore} = <strong>{totalScore}</strong>
+              </p>
+            </section>
           </div>
         </section>
 
@@ -682,6 +726,7 @@ async function createContextualReply(
           result: checkIn.result,
           memo: checkIn.memo,
         })),
+        scorecard: createScorecardSummary(checkIns),
       }),
     });
 
@@ -714,4 +759,32 @@ function countRecentMiniFailures(checkIns: ElasticCheckIn[]) {
     else break;
   }
   return count;
+}
+
+function getBonusItems(levelCounts: { mini: number; plus: number; elite: number; notDone: number; noResponse: number }) {
+  const bonuses: { label: string; points: number }[] = [];
+  if (levelCounts.elite >= 10) bonuses.push({ label: "Elite 10회 이상", points: 3 });
+  if (levelCounts.elite >= 15) bonuses.push({ label: "Elite 15회 이상", points: 3 });
+  if (levelCounts.notDone === 0 && levelCounts.noResponse === 0 && levelCounts.mini + levelCounts.plus + levelCounts.elite >= 30) {
+    bonuses.push({ label: "30일 모두 기록", points: 20 });
+  }
+  return bonuses;
+}
+
+function createScorecardSummary(checkIns: ElasticCheckIn[]) {
+  const mini = checkIns.filter((checkIn) => checkIn.result === "mini").length;
+  const plus = checkIns.filter((checkIn) => checkIn.result === "plus").length;
+  const elite = checkIns.filter((checkIn) => checkIn.result === "elite").length;
+  const notDone = checkIns.filter((checkIn) => checkIn.result === "not_done").length;
+  const noResponse = checkIns.filter((checkIn) => checkIn.result === "no_response").length;
+  const baseScore = mini + plus * 2 + elite * 3;
+  const bonusScore = getBonusItems({ mini, plus, elite, notDone, noResponse }).reduce((sum, item) => sum + item.points, 0);
+  return {
+    mini,
+    plus,
+    elite,
+    base_score: baseScore,
+    bonus_score: bonusScore,
+    total_score: baseScore + bonusScore,
+  };
 }

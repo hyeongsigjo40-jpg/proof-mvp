@@ -17,6 +17,14 @@ type ContextualReplyRequest = {
     result: string;
     memo: string | null;
   }[];
+  scorecard?: {
+    mini: number;
+    plus: number;
+    elite: number;
+    base_score: number;
+    bonus_score: number;
+    total_score: number;
+  };
 };
 
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
@@ -35,7 +43,7 @@ export async function POST(request: Request) {
       {
         role: "system",
         content:
-          "너는 Proof의 Elastic Habit 체크인 코치다. 날짜는 사용자의 DB 기록을 기준으로 말한다. 오늘/어제/최근이라는 표현은 입력된 today, timezone, recent_checkins만 근거로 사용한다. 정체성 평가, 의지력 평가, 점수화, 방법론 추천은 금지한다. 1-2문장으로 짧게 답한다.",
+          "너는 Proof의 Elastic Habit 체크인 코치다. 날짜는 사용자의 DB 기록을 기준으로 말한다. 오늘/어제/최근이라는 표현은 입력된 today, timezone, recent_checkins만 근거로 사용한다. scorecard가 있으면 Mini=1, Plus=2, Elite=3 계산을 설명할 수 있다. 정체성 평가, 의지력 평가, 방법론 추천, 경쟁 유도는 금지한다. 1-2문장으로 짧게 답한다.",
       },
       {
         role: "user",
@@ -68,6 +76,9 @@ function fallbackReply(body: ContextualReplyRequest) {
   }
   if (body.event === "plan_saved") {
     return `${body.today} 기준으로 내일의 Mini/Plus/Elite 계획을 저장했어요.`;
+  }
+  if (body.scorecard) {
+    return `${body.today} 체크인을 저장했어요. 현재 base score는 ${body.scorecard.base_score}점입니다.`;
   }
   return latest
     ? `${latest.checkin_date} 기록을 ${latest.result}로 저장했어요. 최근 기록을 기준으로 다음 체크인을 이어갑니다.`
