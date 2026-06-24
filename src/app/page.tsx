@@ -492,6 +492,48 @@ export default function Home() {
     assistant(MINI_OPENING("이 습관"));
   }
 
+  async function jumpToDailyCheckIn() {
+    const seeded: OnboardingData = {
+      lifeArea: data.lifeArea || "[debug] 습관 실험",
+      whyChange: data.whyChange || "[debug] 데일리 체크인 확인",
+      goalIdentityStatement: data.goalIdentityStatement || "[debug] 나는 작은 증거를 기록하는 사람이다.",
+      failureSituation: data.failureSituation || "[debug] 피곤한 날 시작이 밀림",
+      failureFeeling: data.failureFeeling || "[debug] 시작 비용이 크게 느껴짐",
+      habitAction: data.habitAction && data.habitAction !== "[스킵]" ? data.habitAction : "데일리 체크인 테스트",
+      habitPeriod: data.habitPeriod && data.habitPeriod !== "[스킵]" ? data.habitPeriod : "7일",
+      habitFrequency: data.habitFrequency && data.habitFrequency !== "[스킵]" ? data.habitFrequency : "매일",
+      habitWhen: data.habitWhen && data.habitWhen !== "[스킵]" ? data.habitWhen : "저녁에",
+      habitAmount: data.habitAmount && data.habitAmount !== "[스킵]" ? data.habitAmount : "5분",
+      miniTask: data.miniTask || "1분만 기록하기",
+      plusTask: data.plusTask || "5분 기록하기",
+      eliteTask: data.eliteTask || "패턴과 내일 조정까지 적기",
+    };
+
+    setData(seeded);
+    setGoalData({
+      lifeArea: seeded.lifeArea,
+      whyChange: seeded.whyChange,
+      identityStatement: seeded.goalIdentityStatement,
+    });
+    setNextMini(seeded.miniTask);
+    setNextPlus(seeded.plusTask);
+    setNextElite(seeded.eliteTask);
+    setSelectedCheckIn(null);
+    setMemo("");
+    setPatternInput("");
+    setDailyPatternTurns([]);
+    setMode("daily");
+    setStep("complete");
+    setMessages([
+      {
+        role: "assistant",
+        text: "[debug] 데일리 체크인으로 바로 이동했어요.\n오늘의 패턴을 남겨볼게요. 실행 여부보다, 어떤 조건에서 움직였고 어디서 막혔는지가 더 중요해요.",
+      },
+    ]);
+    setSaveMessage(null);
+    await persistProfile(seeded);
+  }
+
   async function resetCurrentDebugSession() {
     if (!userId || !debugEnabled) return;
     setPending(true);
@@ -524,6 +566,7 @@ export default function Home() {
   if (loading) return <LoadingState />;
 
   const isGoalPhase = step !== "mini" && step !== "plus" && step !== "elite" && step !== "complete";
+  const trackerSubtitle = buildTrackerSubtitle(data);
 
   return (
     <main className="tracker-workspace">
@@ -535,6 +578,7 @@ export default function Home() {
           <div>
             <p className="eyebrow">Elastic Habit Tracker</p>
             <h1>{data.habitAction || "습관 설정 중"}</h1>
+            {trackerSubtitle ? <p className="tracker-subtitle">{trackerSubtitle}</p> : null}
           </div>
           <div className="tracker-score">
             <strong>{completedCount}</strong>
@@ -750,6 +794,7 @@ export default function Home() {
                 memo={memo}
                 mode={mode}
                 onJumpToStep={jumpToStep}
+                onJumpToDaily={jumpToDailyCheckIn}
                 onNewSession={startNewDebugSession}
                 onResetConversation={resetDebugConversation}
                 onResetSession={resetCurrentDebugSession}
@@ -792,6 +837,7 @@ function OnboardingDebugPanel({
   memo,
   mode,
   onJumpToStep,
+  onJumpToDaily,
   onNewSession,
   onResetConversation,
   onResetSession,
@@ -810,6 +856,7 @@ function OnboardingDebugPanel({
   memo: string;
   mode: "onboarding" | "daily";
   onJumpToStep: (step: OnboardingStep) => void;
+  onJumpToDaily: () => void;
   onNewSession: () => void;
   onResetConversation: () => void;
   onResetSession: () => void;
@@ -883,6 +930,7 @@ function OnboardingDebugPanel({
 
       {/* Quick actions */}
       <div className="debug-actions">
+        <button className="debug-btn-accent" disabled={pending} onClick={onJumpToDaily} type="button">데일리 바로가기</button>
         <button className="debug-btn-accent" disabled={pending} onClick={onSkipGoal} type="button">전체 스킵→mini</button>
         <button disabled={pending} onClick={onResetConversation} type="button">대화 초기화</button>
         <button disabled={pending} onClick={onResetSession} type="button">세션 초기화</button>
@@ -1270,6 +1318,12 @@ function buildSmartSentence(data: OnboardingData): string {
   if (habitAmount) parts.push(`${habitAmount} 한다`);
   else parts.push("한다");
   return `나는 ${parts.join(", ")}.`;
+}
+
+function buildTrackerSubtitle(data: OnboardingData): string {
+  const schedule = [data.habitPeriod, data.habitFrequency, data.habitWhen].filter(Boolean).join(" · ");
+  const amount = data.habitAmount ? `${data.habitAmount} 기준` : "";
+  return [schedule, amount].filter(Boolean).join(" · ");
 }
 
 function createDailyNote(status: CheckInStatus, memo: string) {
