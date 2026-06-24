@@ -2,6 +2,10 @@ import OpenAI from "openai";
 import { NextResponse } from "next/server";
 
 type OnboardingStep =
+  | "goal_area"
+  | "goal_why"
+  | "goal_identity"
+  | "goal_complete"
   | "habit"
   | "motive"
   | "transition"
@@ -17,6 +21,9 @@ type OnboardingStep =
   | "complete";
 
 type OnboardingData = {
+  lifeArea?: string;
+  whyChange?: string;
+  goalIdentityStatement?: string;
   habitName?: string;
   identityMotive?: string;
   motiveSummary?: string;
@@ -51,6 +58,10 @@ const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPE
 const model = process.env.OPENAI_MODEL || "gpt-5.4-mini";
 
 const stepOrder: OnboardingStep[] = [
+  "goal_area",
+  "goal_why",
+  "goal_identity",
+  "goal_complete",
   "habit",
   "motive",
   "transition",
@@ -79,7 +90,7 @@ export async function POST(request: Request) {
       {
         role: "system",
         content:
-          "너는 Proof의 Elastic Habit 온보딩 진행자이자 상태 컨트롤러다. 사용자의 입력이 현재 단계의 답변인지, 질문인지, 수정 요청인지 먼저 판단한다. 답변이면 data_patch 배열에 저장할 필드와 값만 넣고 다음 단계로 이동한다. 질문/추천 요청/불명확한 입력이면 should_advance=false로 두고 같은 단계에 머무르며 도움을 주며 data_patch는 빈 배열로 둔다. 사용자가 이전 답변을 고치려 하면 data_patch로 수정하고 필요한 단계에 머문다. 정체성 평가, 의지력 평가, 성격 진단, 죄책감 유발은 금지한다. Mini/Plus/Elite는 행동량 단계다. reply는 한국어 1-3문장으로 짧게 쓴다.",
+          "너는 Proof 온보딩 진행자다. 두 파트로 나뉜다. [목표 파트: goal_area→goal_why→goal_identity→goal_complete] 사용자의 삶의 영역·이유·비전을 자연스러운 대화로 파악하고, goal_identity 단계에서는 '나는 [이전 패턴]이 아니라, [새 행동 정체성]인 사람이다.' 형태의 정체성 문장을 goalIdentityStatement에 저장한다. [습관 파트: habit→...→complete] Elastic Habit 온보딩. 공통 규칙: 사용자 입력이 답변이면 data_patch에 저장 후 advance. 질문/불명확하면 should_advance=false. 정체성·의지력 평가, 죄책감 유발 금지. reply는 한국어 1-3문장, 자연스럽고 따뜻하게.",
       },
       {
         role: "user",
@@ -88,11 +99,14 @@ export async function POST(request: Request) {
           current_step_goal: stepGoal(body.current_step),
           next_step_if_answer: getNextStep(body.current_step),
           data_patch_rules: {
-            habit: "habitName에는 사용자의 긴 문장을 그대로 넣지 말고 화면 제목으로 쓸 짧은 명사구를 저장한다. 예: 평일 오전 고인지 작업",
-            motive: "identityMotive에는 원문에 가까운 목표/이유를 저장하고, motiveSummary에는 24자 이내 명사구를 저장한다.",
-            mini: "사용자가 추천을 물으면 저장하지 말고 should_advance=false. 실제 선택/동의가 있을 때만 miniTask에 저장한다.",
-            plus: "사용자가 추천을 물으면 저장하지 말고 should_advance=false. 실제 선택/동의가 있을 때만 plusTask에 저장한다.",
-            elite: "사용자가 추천을 물으면 저장하지 말고 should_advance=false. 실제 선택/동의가 있을 때만 eliteTask에 저장한다.",
+            goal_area: "lifeArea에 사용자가 말한 삶의 영역을 짧게 저장한다.",
+            goal_why: "whyChange에 이유를 원문 가깝게 저장한다.",
+            goal_identity: "goalIdentityStatement에 '나는 [이전 패턴]이 아니라, [새 행동 정체성]인 사람이다.' 형태 문장을 저장한다. next_step은 goal_complete.",
+            habit: "habitName에는 화면 제목으로 쓸 짧은 명사구를 저장한다.",
+            motive: "identityMotive에는 원문에 가까운 목표/이유를, motiveSummary에는 24자 이내 명사구를 저장한다.",
+            mini: "사용자가 추천을 물으면 should_advance=false. 실제 선택/동의 시만 miniTask에 저장.",
+            plus: "사용자가 추천을 물으면 should_advance=false. 실제 선택/동의 시만 plusTask에 저장.",
+            elite: "사용자가 추천을 물으면 should_advance=false. 실제 선택/동의 시만 eliteTask에 저장.",
           },
         }),
       },
@@ -122,6 +136,9 @@ export async function POST(request: Request) {
                   field: {
                     type: "string",
                     enum: [
+                      "lifeArea",
+                      "whyChange",
+                      "goalIdentityStatement",
                       "habitName",
                       "identityMotive",
                       "motiveSummary",
@@ -156,6 +173,14 @@ function getNextStep(step: OnboardingStep): OnboardingStep {
 
 function stepGoal(step: OnboardingStep) {
   switch (step) {
+    case "goal_area":
+      return "요즘 바꾸고 싶은 삶의 영역을 자연스럽게 파악한다. 사용자가 구체적으로 말했으면 lifeArea에 저장 후 goal_why로 advance. 막연하거나 고민 중이면 gentle하게 도와준다.";
+    case "goal_why":
+      return "왜 그 영역을 바꾸고 싶은지 진짜 이유를 파악한다. whyChange에 저장 후 goal_identity로 advance.";
+    case "goal_identity":
+      return "이 목표가 이루어지면 어떤 사람이 되어 있을지를 파악하고, '나는 [이전 패턴]이 아니라, [새로운 행동 정체성]인 사람이다.' 형태의 정체성 문장을 만들어 goalIdentityStatement에 저장 후 goal_complete로 advance. reply에는 만든 문장을 quote로 보여주고 1문장 격려를 덧붙인다.";
+    case "goal_complete":
+      return "목표 설정이 완료된 단계. 직접 호출되지 않는다.";
     case "habit":
       return "사용자가 만들고 싶은 습관을 파악한다.";
     case "motive":
@@ -198,6 +223,14 @@ function fallbackTurn(body: OnboardingControllerRequest): OnboardingControllerRe
   }
 
   switch (body.current_step) {
+    case "goal_area":
+      return advance("goal_area", { lifeArea: text }, "왜 그 영역을 바꾸고 싶으세요?");
+    case "goal_why":
+      return advance("goal_why", { whyChange: text }, "이 목표가 이루어지면 어떤 사람이 되어 있을까요? 한 문장으로 말해주세요.");
+    case "goal_identity": {
+      const statement = `나는 ${body.data.lifeArea || "이 영역"}에서 매일 작은 증거를 쌓아가는 사람이다.`;
+      return advance("goal_identity", { goalIdentityStatement: statement }, `"${statement}"\n\n아래 버튼을 눌러 습관 트래커로 넘어가 볼게요.`);
+    }
     case "habit":
       return advance("habit", { habitName: compactHabitName(text) }, "좋아요. 이 습관을 왜 만들고 싶으세요?");
     case "motive":

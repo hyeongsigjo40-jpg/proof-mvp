@@ -50,6 +50,9 @@ type Message = {
 };
 
 type OnboardingData = {
+  lifeArea: string;
+  whyChange: string;
+  goalIdentityStatement: string;
   habitName: string;
   identityMotive: string;
   motiveSummary: string;
@@ -95,6 +98,9 @@ type DailyRecord = {
 };
 
 const emptyOnboarding: OnboardingData = {
+  lifeArea: "",
+  whyChange: "",
+  goalIdentityStatement: "",
   habitName: "",
   identityMotive: "",
   motiveSummary: "",
@@ -154,7 +160,7 @@ function readDebugSessionId() {
 }
 
 export default function Home() {
-  const { loading, userId, error } = useProofSession();
+  const { loading, userId } = useProofSession();
   const [mode, setMode] = useState<"onboarding" | "daily">("onboarding");
   const [step, setStep] = useState<OnboardingStep>("goal_area");
   const [goalData, setGoalData] = useState<GoalData>(emptyGoalData);
@@ -260,21 +266,30 @@ export default function Home() {
 
   async function advanceGoal(text: string) {
     setPending(true);
-    if (step === "goal_area") {
-      setGoalData((d) => ({ ...d, lifeArea: text }));
-      assistant("왜 그 영역을 바꾸고 싶으세요?");
-      setStep("goal_why");
-    } else if (step === "goal_why") {
-      setGoalData((d) => ({ ...d, whyChange: text }));
-      assistant("이 목표가 이루어지면 어떤 사람이 되어 있을까요? 한 문장으로 말해주세요.");
-      setStep("goal_identity");
-    } else if (step === "goal_identity") {
-      const statement = await fetchIdentityStatement(goalData.lifeArea, goalData.whyChange, text);
-      setGoalData((d) => ({ ...d, identityStatement: statement }));
-      assistant(
-        `정체성 문장을 만들었어요.\n\n"${statement}"\n\n이 문장이 마음에 드시나요? 수정이 필요하면 말해주세요. 괜찮으면 아래 버튼을 눌러 습관 트래커로 넘어갑니다.`,
-      );
-      setStep("goal_complete");
+    const currentData = { ...data };
+    const turn = await runOnboardingController(step, text, currentData);
+    recordDebugEvent(step, text, turn);
+    const result = turn.final;
+
+    const nextData = applyOnboardingPatch(currentData, result.data_patch);
+    setData(nextData);
+    assistant(result.reply);
+
+    if (result.should_advance) {
+      setStep(result.next_step);
+      if (result.next_step === "goal_complete") {
+        setGoalData({
+          lifeArea: nextData.lifeArea,
+          whyChange: nextData.whyChange,
+          identityStatement: nextData.goalIdentityStatement,
+        });
+      } else {
+        setGoalData((d) => ({
+          lifeArea: nextData.lifeArea || d.lifeArea,
+          whyChange: nextData.whyChange || d.whyChange,
+          identityStatement: nextData.goalIdentityStatement || d.identityStatement,
+        }));
+      }
     }
     setPending(false);
   }
@@ -636,7 +651,6 @@ export default function Home() {
           </div>
         </div>
 
-        {userId && error ? <p className="error-text">{error}</p> : null}
 
         {!userId ? (
           <div className="daily-panel">
@@ -1219,6 +1233,9 @@ function createDailyNote(status: CheckInStatus, memo: string) {
 
 function mapProfileToData(profile: ElasticProfile): OnboardingData {
   return {
+    lifeArea: profile.life_area ?? "",
+    whyChange: profile.why_change ?? "",
+    goalIdentityStatement: profile.identity_statement ?? "",
     habitName: profile.habit_name,
     identityMotive: profile.identity_motive,
     motiveSummary: profile.motive_summary ?? "",
