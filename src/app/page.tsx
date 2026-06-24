@@ -650,7 +650,7 @@ export default function Home() {
           <MessageCircle size={18} aria-hidden="true" />
           <div>
             <strong>{mode === "onboarding" ? "Proof Onboarding" : "Daily Check-in"}</strong>
-            <span>{mode === "onboarding" ? "GPT 진행형 온보딩" : "Supabase 저장 연결됨"}</span>
+            <span>{mode === "onboarding" ? "AI 진행형 온보딩" : "Supabase 저장 연결됨"}</span>
           </div>
         </div>
 
@@ -922,7 +922,7 @@ function OnboardingComposer({
         disabled={step === "complete" || pending}
         onChange={(event) => setInput(event.target.value)}
         onKeyDown={handleKeyDown}
-        placeholder={pending ? "GPT가 답변을 준비하는 중" : step === "complete" ? "온보딩 완료" : "답변을 입력하세요"}
+        placeholder={pending ? "Proof가 생각하는 중…" : step === "complete" ? "온보딩 완료" : "답변을 입력하세요"}
         ref={textareaRef}
         rows={1}
         value={input}
