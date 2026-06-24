@@ -754,8 +754,8 @@ blockquote {
 }
 
 .tracker-status.not_done {
-  background: rgba(154, 75, 69, 0.12);
-  color: var(--danger);
+  background: rgba(138, 109, 46, 0.13);
+  color: var(--partial);
 }
 
 .tracker-status.open {
@@ -1317,6 +1317,20 @@ blockquote {
   letter-spacing: 0;
 }
 
+.daily-intro {
+  display: grid;
+  gap: 6px;
+}
+
+.daily-intro p,
+.pattern-prompt p,
+.pattern-save-hint {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+  margin: 0;
+}
+
 .daily-card label {
   display: grid;
   gap: 6px;
@@ -1331,6 +1345,24 @@ blockquote {
 .daily-card textarea {
   min-height: 88px;
   resize: vertical;
+}
+
+.pattern-prompt {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 4px;
+  padding-top: 10px;
+}
+
+.pattern-prompt span {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.pattern-composer {
+  display: grid;
+  gap: 8px;
 }
 
 .checkin-buttons {
@@ -1364,8 +1396,8 @@ blockquote {
 }
 
 .checkin-buttons .not-done {
-  background: rgba(154, 75, 69, 0.1);
-  color: var(--danger);
+  background: rgba(138, 109, 46, 0.1);
+  color: var(--partial);
 }
 
 .checkin-buttons button.selected {
@@ -1376,7 +1408,7 @@ blockquote {
 .daily-actions {
   display: grid;
   gap: 8px;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr;
 }
 
 .debug-panel {
