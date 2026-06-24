@@ -925,6 +925,90 @@ blockquote {
   width: 38px;
 }
 
+.daily-panel {
+  display: grid;
+  gap: 12px;
+  min-height: 0;
+  overflow: auto;
+  padding: 2px;
+}
+
+.daily-card {
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+}
+
+.daily-card strong {
+  font-size: 14px;
+  letter-spacing: 0;
+}
+
+.daily-card label {
+  display: grid;
+  gap: 6px;
+}
+
+.daily-card label span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.daily-card textarea {
+  min-height: 88px;
+  resize: vertical;
+}
+
+.checkin-buttons {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.checkin-buttons button {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 850;
+  min-height: 44px;
+}
+
+.checkin-buttons .mini {
+  background: rgba(49, 145, 55, 0.1);
+  color: #318a37;
+}
+
+.checkin-buttons .plus {
+  background: rgba(91, 73, 214, 0.1);
+  color: #5b49d6;
+}
+
+.checkin-buttons .elite {
+  background: rgba(224, 48, 48, 0.1);
+  color: #d93030;
+}
+
+.checkin-buttons .not-done {
+  background: rgba(154, 75, 69, 0.1);
+  color: var(--danger);
+}
+
+.checkin-buttons button.selected {
+  border-color: currentColor;
+  box-shadow: inset 0 0 0 2px currentColor;
+}
+
+.daily-actions {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 1fr 1fr;
+}
+
 @media (max-width: 980px) {
   .tracker-workspace {
     grid-template-columns: 1fr;
@@ -934,6 +1018,11 @@ blockquote {
 
   .chat-panel {
     height: 520px;
+  }
+
+  .checkin-buttons,
+  .daily-actions {
+    grid-template-columns: 1fr 1fr;
   }
 }
 

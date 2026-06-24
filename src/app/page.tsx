@@ -10,134 +10,254 @@ import {
   MessageCircle,
   Minus,
   PencilLine,
+  RotateCcw,
   Target,
 } from "lucide-react";
 
-type RecordStatus = "done" | "partial" | "not_done" | "open";
 type ElasticLevel = "mini" | "plus" | "elite";
+type CheckInStatus = ElasticLevel | "not_done" | "no_response" | "open";
+type OnboardingStep =
+  | "habit"
+  | "motive"
+  | "transition"
+  | "failure_date"
+  | "feeling"
+  | "behavior"
+  | "recovery"
+  | "mini"
+  | "plus"
+  | "elite"
+  | "vision"
+  | "complete";
 
-type TrackerState = {
-  habit: string;
-  goal: string;
-  miniAction: string;
-  plusAction: string;
-  eliteAction: string;
-  patterns: string[];
-  todayStatus: RecordStatus | ElasticLevel;
-  todayNote: string;
-  records: (RecordStatus | ElasticLevel)[];
-};
-
-type ChatMessage = {
+type Message = {
   role: "assistant" | "user";
   text: string;
 };
 
-const initialTracker: TrackerState = {
-  habit: "아직 정해지지 않음",
-  goal: "대화에서 목표가 잡히면 여기에 표시됩니다.",
-  miniAction: "Mini - 아주 작은 시작",
-  plusAction: "Plus - 충분한 하루",
-  eliteAction: "Elite - 강한 날의 확장",
-  patterns: [],
-  todayStatus: "open",
-  todayNote: "",
-  records: [
-    "mini",
-    "plus",
-    "open",
-    "open",
-    "open",
-    "open",
-    "open",
-    "open",
-    "open",
-    "open",
-    "open",
-    "open",
-    "open",
-    "open",
-    "open",
-    "open",
-    "open",
-    "open",
-    "open",
-    "open",
-    "open",
-    "open",
-    "open",
-    "open",
-    "open",
-    "open",
-    "open",
-    "open",
-    "open",
-    "open",
-    "open",
-  ],
+type OnboardingData = {
+  habitName: string;
+  identityMotive: string;
+  recentFailureDate: string;
+  preBreakdownFeeling: string;
+  actualBreakdownBehavior: string;
+  recoveryMethod: string;
+  miniTask: string;
+  plusTask: string;
+  eliteTask: string;
+  monthlyVision: string;
 };
 
-const initialMessages: ChatMessage[] = [
-  {
-    role: "assistant",
-    text: "요즘 만들고 싶은 습관이나 바꾸고 싶은 하루의 장면이 있어요?",
-  },
-];
+type DailyRecord = {
+  day: number;
+  status: CheckInStatus;
+};
 
-const quickReplies = [
-  "토익 공부를 해야 하는데 자꾸 쇼츠 봐",
-  "Mini는 RC 3문제, Plus는 RC 10문제, Elite는 오답 정리까지",
-  "오늘은 Mini만 했어",
-  "오늘은 Elite까지 했어",
-];
+const emptyOnboarding: OnboardingData = {
+  habitName: "",
+  identityMotive: "",
+  recentFailureDate: "",
+  preBreakdownFeeling: "",
+  actualBreakdownBehavior: "",
+  recoveryMethod: "",
+  miniTask: "",
+  plusTask: "",
+  eliteTask: "",
+  monthlyVision: "",
+};
+
+const selfNarrativeKeywords = ["의지", "한심", "원래 그런", "이상해", "못하는 사람", "의지력"];
 
 const statusMeta = {
-  done: { label: "완료", icon: Check },
-  partial: { label: "일부", icon: Minus },
-  not_done: { label: "하지 않음", icon: Circle },
-  open: { label: "열림", icon: PencilLine },
   mini: { label: "Mini", icon: Check },
   plus: { label: "Plus", icon: Check },
   elite: { label: "Elite", icon: Check },
+  not_done: { label: "안함", icon: Circle },
+  no_response: { label: "무응답", icon: Minus },
+  open: { label: "열림", icon: PencilLine },
 };
 
-export default function Home() {
-  const [tracker, setTracker] = useState<TrackerState>(initialTracker);
-  const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
-  const [input, setInput] = useState("");
+const initialRecords: DailyRecord[] = Array.from({ length: 31 }, (_, index) => ({
+  day: index + 1,
+  status: index === 0 ? "mini" : index === 1 ? "plus" : "open",
+}));
 
-  const completionCount = useMemo(
-    () => tracker.records.filter((record) => ["mini", "plus", "elite", "done", "partial"].includes(record)).length,
-    [tracker.records],
-  );
+const initialMessages: Message[] = [
+  {
+    role: "assistant",
+    text: "지금 이루고 싶은 습관이 뭔가요?",
+  },
+];
+
+export default function Home() {
+  const [mode, setMode] = useState<"onboarding" | "daily">("onboarding");
+  const [step, setStep] = useState<OnboardingStep>("habit");
+  const [data, setData] = useState<OnboardingData>(emptyOnboarding);
+  const [records, setRecords] = useState<DailyRecord[]>(initialRecords);
+  const [messages, setMessages] = useState<Message[]>(initialMessages);
+  const [input, setInput] = useState("");
+  const [selectedCheckIn, setSelectedCheckIn] = useState<CheckInStatus | null>(null);
+  const [memo, setMemo] = useState("");
+  const [nextMini, setNextMini] = useState("");
+  const [nextPlus, setNextPlus] = useState("");
+  const [nextElite, setNextElite] = useState("");
+  const [miniFailureCount, setMiniFailureCount] = useState(0);
+
   const levelCounts = useMemo(
     () => ({
-      mini: tracker.records.filter((record) => record === "mini").length,
-      plus: tracker.records.filter((record) => record === "plus").length,
-      elite: tracker.records.filter((record) => record === "elite").length,
+      mini: records.filter((record) => record.status === "mini").length,
+      plus: records.filter((record) => record.status === "plus").length,
+      elite: records.filter((record) => record.status === "elite").length,
+      notDone: records.filter((record) => record.status === "not_done").length,
+      noResponse: records.filter((record) => record.status === "no_response").length,
     }),
-    [tracker.records],
+    [records],
   );
+  const completedCount = levelCounts.plus + levelCounts.elite;
+  const partialCount = levelCounts.mini;
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  function handleTextSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    sendMessage(input);
-  }
-
-  function sendMessage(rawText: string) {
-    const text = rawText.trim();
+    const text = input.trim();
     if (!text) {
       return;
     }
 
-    const nextTracker = updateTrackerFromText(tracker, text);
-    setTracker(nextTracker);
+    setMessages((current) => [...current, { role: "user", text }]);
+    setInput("");
+    advanceOnboarding(text);
+  }
+
+  function advanceOnboarding(text: string) {
+    if (step === "habit") {
+      setData((current) => ({ ...current, habitName: text }));
+      assistant("이걸 왜 만들고 싶으세요?");
+      setStep("motive");
+      return;
+    }
+
+    if (step === "motive") {
+      setData((current) => ({ ...current, identityMotive: text }));
+      assistant(createTransitionText(text));
+      setStep("transition");
+      return;
+    }
+
+    if (step === "failure_date") {
+      setData((current) => ({ ...current, recentFailureDate: text }));
+      assistant("무너지기 직전, 기분이 어땠어요?");
+      setStep("feeling");
+      return;
+    }
+
+    if (step === "feeling") {
+      setData((current) => ({ ...current, preBreakdownFeeling: text }));
+      assistant("그때 실제로 뭘 했어요?");
+      setStep("behavior");
+      return;
+    }
+
+    if (step === "behavior") {
+      setData((current) => ({ ...current, actualBreakdownBehavior: text }));
+      assistant("그 다음엔 보통 어떻게 다시 시작해요?");
+      setStep("recovery");
+      return;
+    }
+
+    if (step === "recovery") {
+      setData((current) => ({ ...current, recoveryMethod: text }));
+      assistant(`${data.habitName || "이 습관"}을 세 단계로 나눠볼게요. Mini, 즉 최소 단위는 무엇으로 할까요?`);
+      setStep("mini");
+      return;
+    }
+
+    if (step === "mini") {
+      setData((current) => ({ ...current, miniTask: text }));
+      assistant("Plus, 즉 보통 단위는 무엇으로 할까요?");
+      setStep("plus");
+      return;
+    }
+
+    if (step === "plus") {
+      setData((current) => ({ ...current, plusTask: text }));
+      assistant("Elite, 즉 도전 단위는 무엇으로 할까요?");
+      setStep("elite");
+      return;
+    }
+
+    if (step === "elite") {
+      setData((current) => ({ ...current, eliteTask: text }));
+      assistant("이게 잘 되면, 한 달 뒤 뭐가 달라져 있을까요? 구체적이고 관찰 가능한 장면으로 적어주세요.");
+      setStep("vision");
+      return;
+    }
+
+    if (step === "vision") {
+      setData((current) => {
+        const next = { ...current, monthlyVision: text };
+        setNextMini(next.miniTask);
+        setNextPlus(next.plusTask);
+        setNextElite(next.eliteTask);
+        return next;
+      });
+      assistant("좋아요. 이제 일상 화면에는 한 달 뒤의 관찰 가능한 변화와 Mini/Plus/Elite만 두고 볼게요.");
+      setStep("complete");
+      setMode("daily");
+    }
+  }
+
+  function continueAfterTransition() {
+    assistant("최근에 못 지킨 날이 언제였어요?");
+    setStep("failure_date");
+  }
+
+  function handleCheckIn(status: Exclude<CheckInStatus, "open" | "no_response">) {
+    setSelectedCheckIn(status);
+  }
+
+  function saveDailyCheckIn() {
+    if (!selectedCheckIn) {
+      return;
+    }
+
+    const note = createDailyNote(selectedCheckIn, memo);
+    const hasSelfNarrative = selfNarrativeKeywords.some((keyword) => memo.includes(keyword));
     setMessages((current) => [
       ...current,
-      { role: "user", text },
-      { role: "assistant", text: createAssistantReply(nextTracker, text) },
+      { role: "user", text: note },
+      ...(hasSelfNarrative
+        ? [
+            {
+              role: "assistant" as const,
+              text: "기억하시죠, 오늘은 그 사람인지가 아니라 이 행동을 했는지만 보기로 했었죠",
+            },
+          ]
+        : []),
+      { role: "assistant", text: "오늘 기록을 반영했어요. 이제 내일의 세 단계는 그대로 둘지 조정할지 확인해볼게요." },
     ]);
-    setInput("");
+
+    setRecords((current) => current.map((record) => (record.day === 3 ? { ...record, status: selectedCheckIn } : record)));
+    setMiniFailureCount((current) => (selectedCheckIn === "not_done" ? current + 1 : 0));
+    setMemo("");
+  }
+
+  function saveNextPlan() {
+    setData((current) => ({
+      ...current,
+      miniTask: nextMini || current.miniTask,
+      plusTask: nextPlus || current.plusTask,
+      eliteTask: nextElite || current.eliteTask,
+    }));
+    assistant("내일 계획을 반영했어요. Mini는 계속 가장 쉽게 시작할 수 있는 단위로 유지합니다.");
+  }
+
+  function markNoResponse() {
+    setRecords((current) => current.map((record) => (record.day === 3 ? { ...record, status: "no_response" } : record)));
+    assistant("응답 없음으로 구분해둘게요. 시스템이 임의로 하지 않음으로 판정하지 않습니다.");
+  }
+
+  function assistant(text: string) {
+    setMessages((current) => [...current, { role: "assistant", text }]);
   }
 
   return (
@@ -146,83 +266,83 @@ export default function Home() {
         <div className="tracker-header">
           <div>
             <p className="eyebrow">Elastic Habit Tracker</p>
-            <h1>{tracker.habit}</h1>
+            <h1>{data.habitName || "습관 설정 중"}</h1>
           </div>
           <div className="tracker-score">
-            <strong>{completionCount}</strong>
-            <span>이번 주 실행</span>
+            <strong>{completedCount}</strong>
+            <span>Plus/Elite 완료</span>
           </div>
         </div>
 
         <section className="tracker-band goal-band">
           <div className="band-title">
             <Target size={18} aria-hidden="true" />
-            <span>목표 그림</span>
+            <span>한 달 뒤 관찰 가능한 변화</span>
           </div>
-          <p>{tracker.goal}</p>
+          <p>{data.monthlyVision || "온보딩 마지막 답변이 끝나면 이곳에 고정됩니다."}</p>
         </section>
 
         <div className="elastic-grid">
           <section className="tracker-tile level-mini">
             <span>Mini</span>
-            <strong>{tracker.miniAction}</strong>
+            <strong>{data.miniTask || "최소 단위"}</strong>
           </section>
           <section className="tracker-tile level-plus">
             <span>Plus</span>
-            <strong>{tracker.plusAction}</strong>
+            <strong>{data.plusTask || "보통 단위"}</strong>
           </section>
           <section className="tracker-tile level-elite">
             <span>Elite</span>
-            <strong>{tracker.eliteAction}</strong>
+            <strong>{data.eliteTask || "도전 단위"}</strong>
           </section>
         </div>
 
         <section className="tracker-band">
           <div className="band-title">
             <Flame size={18} aria-hidden="true" />
-            <span>자주 흔들리는 장면</span>
+            <span>V1 개인화</span>
           </div>
-          <div className="pattern-list">
-            {tracker.patterns.length ? (
-              tracker.patterns.map((pattern) => <span key={pattern}>{pattern}</span>)
-            ) : (
-              <span>대화에서 발견되면 추가됩니다</span>
-            )}
-          </div>
+          <p>
+            {miniFailureCount >= 3
+              ? "Mini를 더 쉽게 조정해볼까요?"
+              : "V1에서는 Mini 연속 실패만 감지합니다. 감정/회복 데이터는 저장만 합니다."}
+          </p>
         </section>
 
         <section className="today-strip">
           <div>
             <div className="band-title">
               <CalendarCheck size={18} aria-hidden="true" />
-              <span>오늘</span>
+              <span>오늘 체크인</span>
             </div>
-            <p>{tracker.todayNote || "체크인 답변이 들어오면 오늘 기록이 바뀝니다."}</p>
+            <p>{selectedCheckIn ? createDailyNote(selectedCheckIn, memo) : "오늘 어떤 단계까지 했는지 선택합니다."}</p>
           </div>
-          <span className={`tracker-status ${tracker.todayStatus}`}>{statusMeta[tracker.todayStatus].label}</span>
+          <span className={`tracker-status ${selectedCheckIn || "open"}`}>
+            {statusMeta[selectedCheckIn || "open"].label}
+          </span>
         </section>
 
         <section className="scorecard-strip" aria-label="이번 달 Mini Plus Elite 카운트">
           <div>
-            <span>Mini</span>
-            <strong>{levelCounts.mini}</strong>
+            <span>Mini / partial</span>
+            <strong>{partialCount}</strong>
           </div>
           <div>
-            <span>Plus</span>
+            <span>Plus / 완료</span>
             <strong>{levelCounts.plus}</strong>
           </div>
           <div>
-            <span>Elite</span>
+            <span>Elite / 완료</span>
             <strong>{levelCounts.elite}</strong>
           </div>
         </section>
 
         <section className="month-grid" aria-label="이번 달 기록">
-          {tracker.records.map((record, index) => {
-            const Icon = statusMeta[record].icon;
+          {records.map((record) => {
+            const Icon = statusMeta[record.status].icon;
             return (
-              <div className={`day-cell ${record}`} key={`${record}-${index}`}>
-                <span>{index + 1}</span>
+              <div className={`day-cell ${record.status}`} key={record.day}>
+                <span>{record.day}</span>
                 <Icon size={17} aria-hidden="true" />
               </div>
             );
@@ -230,12 +350,12 @@ export default function Home() {
         </section>
       </section>
 
-      <aside className="chat-panel" aria-label="AI coach chat">
+      <aside className="chat-panel" aria-label="Proof onboarding and check-in">
         <div className="chat-title">
           <MessageCircle size={18} aria-hidden="true" />
           <div>
-            <strong>Proof Coach</strong>
-            <span>대화가 트래커를 채웁니다</span>
+            <strong>{mode === "onboarding" ? "Proof Onboarding" : "Daily Check-in"}</strong>
+            <span>{mode === "onboarding" ? "고정 5단계 시나리오" : "순수 과제 중심 체크인"}</span>
           </div>
         </div>
 
@@ -247,118 +367,180 @@ export default function Home() {
           ))}
         </div>
 
-        <div className="quick-replies">
-          {quickReplies.map((reply) => (
-            <button key={reply} onClick={() => sendMessage(reply)} type="button">
-              {reply}
-            </button>
-          ))}
-        </div>
-
-        <form className="chat-composer" onSubmit={handleSubmit}>
-          <input
-            aria-label="메시지"
-            value={input}
-            onChange={(event) => setInput(event.target.value)}
-            placeholder="대화로 목표, 최소 행동, 체크인을 남겨보세요"
+        {mode === "onboarding" ? (
+          <OnboardingComposer
+            input={input}
+            setInput={setInput}
+            step={step}
+            onSubmit={handleTextSubmit}
+            onContinue={continueAfterTransition}
           />
-          <button aria-label="보내기" type="submit">
-            <ArrowUp size={18} aria-hidden="true" />
-          </button>
-        </form>
+        ) : (
+          <DailyCheckIn
+            data={data}
+            memo={memo}
+            nextElite={nextElite}
+            nextMini={nextMini}
+            nextPlus={nextPlus}
+            selectedCheckIn={selectedCheckIn}
+            setMemo={setMemo}
+            setNextElite={setNextElite}
+            setNextMini={setNextMini}
+            setNextPlus={setNextPlus}
+            onCheckIn={handleCheckIn}
+            onNoResponse={markNoResponse}
+            onSaveCheckIn={saveDailyCheckIn}
+            onSavePlan={saveNextPlan}
+          />
+        )}
       </aside>
     </main>
   );
 }
 
-function updateTrackerFromText(current: TrackerState, text: string): TrackerState {
-  const lower = text.toLowerCase();
-  const next: TrackerState = {
-    ...current,
-    patterns: [...current.patterns],
-    records: [...current.records],
-  };
-
-  if (text.includes("토익") || lower.includes("toeic")) {
-    next.habit = "토익 공부";
-    next.goal = "저녁에 책상으로 돌아와 문제를 풀고 기록을 남기는 하루";
+function OnboardingComposer({
+  input,
+  onContinue,
+  onSubmit,
+  setInput,
+  step,
+}: {
+  input: string;
+  onContinue: () => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  setInput: (value: string) => void;
+  step: OnboardingStep;
+}) {
+  if (step === "transition") {
+    return (
+      <button className="primary-button" onClick={onContinue} type="button">
+        최근 실패 구체화로
+      </button>
+    );
   }
 
-  if (text.includes("운동")) {
-    next.habit = "운동";
-    next.goal = "몸을 움직이는 시간을 하루 안에 작게라도 확보하는 흐름";
-  }
-
-  next.miniAction = extractLevelAction(text, "Mini") ?? next.miniAction;
-  next.plusAction = extractLevelAction(text, "Plus") ?? next.plusAction;
-  next.eliteAction = extractLevelAction(text, "Elite") ?? next.eliteAction;
-
-  if (text.includes("최소") && next.miniAction === "Mini - 아주 작은 시작") {
-    const minimumMatch = text.match(/최소(?:는|로|:)?\s?(?:RC\s?)?(\d+)\s?(문제|분|개|쪽|페이지)?/i);
-    if (minimumMatch) {
-      const unit = minimumMatch[2] ?? "문제";
-      next.miniAction = text.includes("RC") ? `RC ${minimumMatch[1]}${unit}` : `${minimumMatch[1]}${unit}`;
-    }
-  }
-
-  for (const pattern of ["쇼츠", "침대", "유튜브", "인스타", "폰", "퇴근 후", "피곤"]) {
-    if (text.includes(pattern) && !next.patterns.includes(pattern)) {
-      next.patterns.push(pattern);
-    }
-  }
-
-  if (text.includes("했어") || text.includes("했다") || text.includes("완료")) {
-    next.todayStatus = text.includes("Elite")
-      ? "elite"
-      : text.includes("Plus")
-        ? "plus"
-        : text.includes("Mini") || text.includes("만") || text.includes("조금")
-          ? "mini"
-          : text.includes("못")
-            ? "not_done"
-            : "plus";
-    next.todayNote = text;
-    next.records[2] = next.todayStatus;
-  }
-
-  if (text.includes("못 했") || text.includes("못했") || text.includes("안 했") || text.includes("안했")) {
-    next.todayStatus = "not_done";
-    next.todayNote = text;
-    next.records[2] = "not_done";
-  }
-
-  return next;
+  return (
+    <form className="chat-composer" onSubmit={onSubmit}>
+      <input
+        aria-label="온보딩 답변"
+        value={input}
+        onChange={(event) => setInput(event.target.value)}
+        placeholder={step === "complete" ? "온보딩 완료" : "답변을 입력하세요"}
+        disabled={step === "complete"}
+      />
+      <button aria-label="보내기" disabled={step === "complete"} type="submit">
+        <ArrowUp size={18} aria-hidden="true" />
+      </button>
+    </form>
+  );
 }
 
-function createAssistantReply(tracker: TrackerState, text: string) {
-  if (tracker.todayStatus === "mini") {
-    return "Mini로 기록했어요. 작은 실행도 그날에 맞게 휘어진 성공으로 남겨둘게요.";
-  }
+function DailyCheckIn({
+  data,
+  memo,
+  nextElite,
+  nextMini,
+  nextPlus,
+  selectedCheckIn,
+  setMemo,
+  setNextElite,
+  setNextMini,
+  setNextPlus,
+  onCheckIn,
+  onNoResponse,
+  onSaveCheckIn,
+  onSavePlan,
+}: {
+  data: OnboardingData;
+  memo: string;
+  nextElite: string;
+  nextMini: string;
+  nextPlus: string;
+  selectedCheckIn: CheckInStatus | null;
+  setMemo: (value: string) => void;
+  setNextElite: (value: string) => void;
+  setNextMini: (value: string) => void;
+  setNextPlus: (value: string) => void;
+  onCheckIn: (status: Exclude<CheckInStatus, "open" | "no_response">) => void;
+  onNoResponse: () => void;
+  onSaveCheckIn: () => void;
+  onSavePlan: () => void;
+}) {
+  return (
+    <div className="daily-panel">
+      <section className="daily-card">
+        <strong>오늘 {data.habitName} 중 뭘 했어요?</strong>
+        <div className="checkin-buttons">
+          <button className={selectedCheckIn === "mini" ? "selected mini" : "mini"} onClick={() => onCheckIn("mini")} type="button">
+            Mini
+          </button>
+          <button className={selectedCheckIn === "plus" ? "selected plus" : "plus"} onClick={() => onCheckIn("plus")} type="button">
+            Plus
+          </button>
+          <button className={selectedCheckIn === "elite" ? "selected elite" : "elite"} onClick={() => onCheckIn("elite")} type="button">
+            Elite
+          </button>
+          <button
+            className={selectedCheckIn === "not_done" ? "selected not-done" : "not-done"}
+            onClick={() => onCheckIn("not_done")}
+            type="button"
+          >
+            안함
+          </button>
+        </div>
+        <textarea
+          value={memo}
+          onChange={(event) => setMemo(event.target.value)}
+          placeholder="선택 메모. 자기비난 키워드가 들어오면 고정 전환 문장을 다시 보여줍니다."
+          rows={3}
+        />
+        <div className="daily-actions">
+          <button className="secondary-action no-margin" onClick={onNoResponse} type="button">
+            무응답으로 보기
+          </button>
+          <button className="primary-button" disabled={!selectedCheckIn} onClick={onSaveCheckIn} type="button">
+            체크인 저장
+          </button>
+        </div>
+      </section>
 
-  if (tracker.todayStatus === "plus") {
-    return "Plus로 기록했어요. 오늘의 충분한 실행으로 왼쪽 월간 트래커에 반영했어요.";
-  }
-
-  if (tracker.todayStatus === "elite") {
-    return "Elite까지 반영했어요. 강한 날의 확장 실행으로 기록합니다.";
-  }
-
-  if (tracker.todayStatus === "not_done") {
-    return "기록했어요. 지금은 평가보다 장면이 중요해요. 다음 계획에서는 이 패턴을 피하는 첫 행동을 같이 잡아볼게요.";
-  }
-
-  if (text.includes("Mini") || text.includes("Plus") || text.includes("Elite")) {
-    return "Mini, Plus, Elite 단계를 트래커에 반영했어요. 오늘은 어느 강도까지 했는지도 대화로 남길 수 있어요.";
-  }
-
-  if (tracker.habit !== "아직 정해지지 않음") {
-    return "좋아요. 목표 장면을 왼쪽에 잡아뒀어요. Mini, Plus, Elite 세 단계로 나눠볼까요?";
-  }
-
-  return "좋아요. 그 장면을 조금 더 구체화해볼게요. 언제, 어디서, 무엇을 하면 충분한 하루에 가까울까요?";
+      <section className="daily-card">
+        <strong>내일 Mini / Plus / Elite 계획</strong>
+        <label>
+          <span>Mini</span>
+          <input value={nextMini} onChange={(event) => setNextMini(event.target.value)} placeholder={data.miniTask} />
+        </label>
+        <label>
+          <span>Plus</span>
+          <input value={nextPlus} onChange={(event) => setNextPlus(event.target.value)} placeholder={data.plusTask} />
+        </label>
+        <label>
+          <span>Elite</span>
+          <input value={nextElite} onChange={(event) => setNextElite(event.target.value)} placeholder={data.eliteTask} />
+        </label>
+        <button className="primary-button" onClick={onSavePlan} type="button">
+          내일 계획 확인
+        </button>
+      </section>
+    </div>
+  );
 }
 
-function extractLevelAction(text: string, level: "Mini" | "Plus" | "Elite") {
-  const match = text.match(new RegExp(`${level}(?:는|은|:)?\\s?([^,]+)`, "i"));
-  return match?.[1]?.trim() ?? null;
+function createTransitionText(identityMotive: string) {
+  return `그러니까 ${summarizeMotive(identityMotive)}이 진짜 이유시네요. 그거 충분히 이해돼요.
+근데 그걸 매일 도달했는지로 재려고 하면 오히려 매일 흔들릴 수 있어요.
+그래서 지금부터는 '그런 사람인지'가 아니라 '오늘 이 행동을 했는지'만 보려고 해요.`;
+}
+
+function summarizeMotive(value: string) {
+  const trimmed = value.trim();
+  if (trimmed.length <= 34) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, 34)}...`;
+}
+
+function createDailyNote(status: CheckInStatus, memo: string) {
+  const statusText = status === "not_done" ? "안함" : status === "no_response" ? "무응답" : status;
+  return memo ? `${statusText}: ${memo}` : statusText;
 }
