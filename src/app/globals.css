@@ -542,7 +542,7 @@ blockquote {
 .tracker-panel {
   display: grid;
   gap: 18px;
-  grid-template-rows: auto auto auto auto auto 1fr;
+  grid-template-rows: auto auto auto auto auto auto 1fr;
   overflow: hidden;
   padding: 22px;
 }
@@ -617,7 +617,7 @@ blockquote {
 .elastic-grid {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .tracker-tile {
@@ -627,6 +627,21 @@ blockquote {
   gap: 8px;
   min-height: 128px;
   padding: 16px;
+}
+
+.tracker-tile.level-mini {
+  background: rgba(49, 145, 55, 0.1);
+  border-color: rgba(49, 145, 55, 0.25);
+}
+
+.tracker-tile.level-plus {
+  background: rgba(91, 73, 214, 0.1);
+  border-color: rgba(91, 73, 214, 0.24);
+}
+
+.tracker-tile.level-elite {
+  background: rgba(224, 48, 48, 0.1);
+  border-color: rgba(224, 48, 48, 0.24);
 }
 
 .tracker-tile span {
@@ -675,6 +690,21 @@ blockquote {
   color: var(--primary);
 }
 
+.tracker-status.mini {
+  background: rgba(49, 145, 55, 0.14);
+  color: #318a37;
+}
+
+.tracker-status.plus {
+  background: rgba(91, 73, 214, 0.13);
+  color: #5b49d6;
+}
+
+.tracker-status.elite {
+  background: rgba(224, 48, 48, 0.13);
+  color: #d93030;
+}
+
 .tracker-status.partial {
   background: rgba(138, 109, 46, 0.13);
   color: var(--partial);
@@ -690,11 +720,38 @@ blockquote {
   color: var(--muted);
 }
 
-.week-grid {
-  align-self: end;
+.scorecard-strip {
   display: grid;
   gap: 10px;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.scorecard-strip div {
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: flex;
+  justify-content: space-between;
+  min-height: 52px;
+  padding: 10px 12px;
+}
+
+.scorecard-strip span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.scorecard-strip strong {
+  color: var(--primary);
+  font-size: 24px;
+}
+
+.month-grid {
+  align-self: end;
+  display: grid;
+  gap: 6px;
+  grid-template-columns: repeat(31, minmax(22px, 1fr));
 }
 
 .day-cell {
@@ -702,10 +759,10 @@ blockquote {
   border: 1px solid var(--line);
   border-radius: 8px;
   display: grid;
-  gap: 10px;
+  gap: 8px;
   justify-items: center;
-  min-height: 90px;
-  padding: 12px 8px;
+  min-height: 58px;
+  padding: 7px 4px;
 }
 
 .day-cell span {
@@ -717,6 +774,21 @@ blockquote {
 .day-cell.done {
   background: rgba(49, 91, 76, 0.12);
   color: var(--primary);
+}
+
+.day-cell.mini {
+  background: rgba(49, 145, 55, 0.14);
+  color: #318a37;
+}
+
+.day-cell.plus {
+  background: rgba(91, 73, 214, 0.13);
+  color: #5b49d6;
+}
+
+.day-cell.elite {
+  background: rgba(224, 48, 48, 0.13);
+  color: #d93030;
 }
 
 .day-cell.partial {
@@ -896,8 +968,12 @@ blockquote {
   }
 
   .elastic-grid,
-  .week-grid {
+  .scorecard-strip {
     grid-template-columns: 1fr;
+  }
+
+  .month-grid {
+    grid-template-columns: repeat(7, minmax(0, 1fr));
   }
 
   .tracker-panel {

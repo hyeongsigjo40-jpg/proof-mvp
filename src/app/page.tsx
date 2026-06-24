@@ -14,16 +14,18 @@ import {
 } from "lucide-react";
 
 type RecordStatus = "done" | "partial" | "not_done" | "open";
+type ElasticLevel = "mini" | "plus" | "elite";
 
 type TrackerState = {
   habit: string;
   goal: string;
-  normalAction: string;
-  minimumAction: string;
+  miniAction: string;
+  plusAction: string;
+  eliteAction: string;
   patterns: string[];
-  todayStatus: RecordStatus;
+  todayStatus: RecordStatus | ElasticLevel;
   todayNote: string;
-  records: RecordStatus[];
+  records: (RecordStatus | ElasticLevel)[];
 };
 
 type ChatMessage = {
@@ -34,12 +36,45 @@ type ChatMessage = {
 const initialTracker: TrackerState = {
   habit: "아직 정해지지 않음",
   goal: "대화에서 목표가 잡히면 여기에 표시됩니다.",
-  normalAction: "정상 버전",
-  minimumAction: "최소 버전",
+  miniAction: "Mini - 아주 작은 시작",
+  plusAction: "Plus - 충분한 하루",
+  eliteAction: "Elite - 강한 날의 확장",
   patterns: [],
   todayStatus: "open",
   todayNote: "",
-  records: ["done", "partial", "open", "open", "open", "open", "open"],
+  records: [
+    "mini",
+    "plus",
+    "open",
+    "open",
+    "open",
+    "open",
+    "open",
+    "open",
+    "open",
+    "open",
+    "open",
+    "open",
+    "open",
+    "open",
+    "open",
+    "open",
+    "open",
+    "open",
+    "open",
+    "open",
+    "open",
+    "open",
+    "open",
+    "open",
+    "open",
+    "open",
+    "open",
+    "open",
+    "open",
+    "open",
+    "open",
+  ],
 };
 
 const initialMessages: ChatMessage[] = [
@@ -51,9 +86,9 @@ const initialMessages: ChatMessage[] = [
 
 const quickReplies = [
   "토익 공부를 해야 하는데 자꾸 쇼츠 봐",
-  "저녁 8시에 RC 10문제, 최소는 3문제",
-  "오늘은 3문제만 했어",
-  "못 했어. 침대에서 쇼츠 봤어",
+  "Mini는 RC 3문제, Plus는 RC 10문제, Elite는 오답 정리까지",
+  "오늘은 Mini만 했어",
+  "오늘은 Elite까지 했어",
 ];
 
 const statusMeta = {
@@ -61,6 +96,9 @@ const statusMeta = {
   partial: { label: "일부", icon: Minus },
   not_done: { label: "하지 않음", icon: Circle },
   open: { label: "열림", icon: PencilLine },
+  mini: { label: "Mini", icon: Check },
+  plus: { label: "Plus", icon: Check },
+  elite: { label: "Elite", icon: Check },
 };
 
 export default function Home() {
@@ -69,7 +107,15 @@ export default function Home() {
   const [input, setInput] = useState("");
 
   const completionCount = useMemo(
-    () => tracker.records.filter((record) => record === "done" || record === "partial").length,
+    () => tracker.records.filter((record) => ["mini", "plus", "elite", "done", "partial"].includes(record)).length,
+    [tracker.records],
+  );
+  const levelCounts = useMemo(
+    () => ({
+      mini: tracker.records.filter((record) => record === "mini").length,
+      plus: tracker.records.filter((record) => record === "plus").length,
+      elite: tracker.records.filter((record) => record === "elite").length,
+    }),
     [tracker.records],
   );
 
@@ -117,13 +163,17 @@ export default function Home() {
         </section>
 
         <div className="elastic-grid">
-          <section className="tracker-tile">
-            <span>정상 버전</span>
-            <strong>{tracker.normalAction}</strong>
+          <section className="tracker-tile level-mini">
+            <span>Mini</span>
+            <strong>{tracker.miniAction}</strong>
           </section>
-          <section className="tracker-tile">
-            <span>최소 버전</span>
-            <strong>{tracker.minimumAction}</strong>
+          <section className="tracker-tile level-plus">
+            <span>Plus</span>
+            <strong>{tracker.plusAction}</strong>
+          </section>
+          <section className="tracker-tile level-elite">
+            <span>Elite</span>
+            <strong>{tracker.eliteAction}</strong>
           </section>
         </div>
 
@@ -152,12 +202,27 @@ export default function Home() {
           <span className={`tracker-status ${tracker.todayStatus}`}>{statusMeta[tracker.todayStatus].label}</span>
         </section>
 
-        <section className="week-grid" aria-label="이번 주 기록">
+        <section className="scorecard-strip" aria-label="이번 달 Mini Plus Elite 카운트">
+          <div>
+            <span>Mini</span>
+            <strong>{levelCounts.mini}</strong>
+          </div>
+          <div>
+            <span>Plus</span>
+            <strong>{levelCounts.plus}</strong>
+          </div>
+          <div>
+            <span>Elite</span>
+            <strong>{levelCounts.elite}</strong>
+          </div>
+        </section>
+
+        <section className="month-grid" aria-label="이번 달 기록">
           {tracker.records.map((record, index) => {
             const Icon = statusMeta[record].icon;
             return (
               <div className={`day-cell ${record}`} key={`${record}-${index}`}>
-                <span>{["월", "화", "수", "목", "금", "토", "일"][index]}</span>
+                <span>{index + 1}</span>
                 <Icon size={17} aria-hidden="true" />
               </div>
             );
@@ -224,18 +289,16 @@ function updateTrackerFromText(current: TrackerState, text: string): TrackerStat
     next.goal = "몸을 움직이는 시간을 하루 안에 작게라도 확보하는 흐름";
   }
 
-  const rcMatch = text.match(/RC\s?(\d+)/i);
-  const genericCount = text.match(/(\d+)\s?(문제|분|개|쪽|페이지)/);
-  if (rcMatch) {
-    next.normalAction = `RC ${rcMatch[1]}문제`;
-  } else if (genericCount && !text.includes("최소")) {
-    next.normalAction = `${genericCount[1]}${genericCount[2]}`;
-  }
+  next.miniAction = extractLevelAction(text, "Mini") ?? next.miniAction;
+  next.plusAction = extractLevelAction(text, "Plus") ?? next.plusAction;
+  next.eliteAction = extractLevelAction(text, "Elite") ?? next.eliteAction;
 
-  const minimumMatch = text.match(/최소(?:는|로|:)?\s?(?:RC\s?)?(\d+)\s?(문제|분|개|쪽|페이지)?/i);
-  if (minimumMatch) {
-    const unit = minimumMatch[2] ?? "문제";
-    next.minimumAction = text.includes("RC") ? `RC ${minimumMatch[1]}${unit}` : `${minimumMatch[1]}${unit}`;
+  if (text.includes("최소") && next.miniAction === "Mini - 아주 작은 시작") {
+    const minimumMatch = text.match(/최소(?:는|로|:)?\s?(?:RC\s?)?(\d+)\s?(문제|분|개|쪽|페이지)?/i);
+    if (minimumMatch) {
+      const unit = minimumMatch[2] ?? "문제";
+      next.miniAction = text.includes("RC") ? `RC ${minimumMatch[1]}${unit}` : `${minimumMatch[1]}${unit}`;
+    }
   }
 
   for (const pattern of ["쇼츠", "침대", "유튜브", "인스타", "폰", "퇴근 후", "피곤"]) {
@@ -245,7 +308,15 @@ function updateTrackerFromText(current: TrackerState, text: string): TrackerStat
   }
 
   if (text.includes("했어") || text.includes("했다") || text.includes("완료")) {
-    next.todayStatus = text.includes("못") ? "not_done" : text.includes("만") || text.includes("조금") ? "partial" : "done";
+    next.todayStatus = text.includes("Elite")
+      ? "elite"
+      : text.includes("Plus")
+        ? "plus"
+        : text.includes("Mini") || text.includes("만") || text.includes("조금")
+          ? "mini"
+          : text.includes("못")
+            ? "not_done"
+            : "plus";
     next.todayNote = text;
     next.records[2] = next.todayStatus;
   }
@@ -260,21 +331,34 @@ function updateTrackerFromText(current: TrackerState, text: string): TrackerStat
 }
 
 function createAssistantReply(tracker: TrackerState, text: string) {
-  if (tracker.todayStatus === "partial") {
-    return "좋아요. 일부 실행으로 기록할게요. 최소 버전이 실제로 작동했는지도 왼쪽에 남겨둘게요.";
+  if (tracker.todayStatus === "mini") {
+    return "Mini로 기록했어요. 작은 실행도 그날에 맞게 휘어진 성공으로 남겨둘게요.";
+  }
+
+  if (tracker.todayStatus === "plus") {
+    return "Plus로 기록했어요. 오늘의 충분한 실행으로 왼쪽 월간 트래커에 반영했어요.";
+  }
+
+  if (tracker.todayStatus === "elite") {
+    return "Elite까지 반영했어요. 강한 날의 확장 실행으로 기록합니다.";
   }
 
   if (tracker.todayStatus === "not_done") {
     return "기록했어요. 지금은 평가보다 장면이 중요해요. 다음 계획에서는 이 패턴을 피하는 첫 행동을 같이 잡아볼게요.";
   }
 
-  if (text.includes("최소") || text.includes("RC")) {
-    return "정상 버전과 최소 버전을 트래커에 반영했어요. 오늘 체크인은 대화로 바로 남길 수 있어요.";
+  if (text.includes("Mini") || text.includes("Plus") || text.includes("Elite")) {
+    return "Mini, Plus, Elite 단계를 트래커에 반영했어요. 오늘은 어느 강도까지 했는지도 대화로 남길 수 있어요.";
   }
 
   if (tracker.habit !== "아직 정해지지 않음") {
-    return "좋아요. 목표 장면을 왼쪽에 잡아뒀어요. 어느 정도면 충분한 하루인지 정상 버전과 최소 버전을 정해볼까요?";
+    return "좋아요. 목표 장면을 왼쪽에 잡아뒀어요. Mini, Plus, Elite 세 단계로 나눠볼까요?";
   }
 
   return "좋아요. 그 장면을 조금 더 구체화해볼게요. 언제, 어디서, 무엇을 하면 충분한 하루에 가까울까요?";
+}
+
+function extractLevelAction(text: string, level: "Mini" | "Plus" | "Elite") {
+  const match = text.match(new RegExp(`${level}(?:는|은|:)?\\s?([^,]+)`, "i"));
+  return match?.[1]?.trim() ?? null;
 }
