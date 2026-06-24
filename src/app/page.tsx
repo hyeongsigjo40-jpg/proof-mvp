@@ -930,7 +930,7 @@ function OnboardingDebugPanel({
 
       {/* Quick actions */}
       <div className="debug-actions">
-        <button className="debug-btn-accent" disabled={pending} onClick={onJumpToDaily} type="button">데일리 바로가기</button>
+        <button className="debug-btn-accent" disabled={pending} onClick={onJumpToDaily} type="button">데일리 체크인 테스트</button>
         <button className="debug-btn-accent" disabled={pending} onClick={onSkipGoal} type="button">전체 스킵→mini</button>
         <button disabled={pending} onClick={onResetConversation} type="button">대화 초기화</button>
         <button disabled={pending} onClick={onResetSession} type="button">세션 초기화</button>
