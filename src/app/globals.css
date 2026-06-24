@@ -936,6 +936,81 @@ blockquote {
   color: var(--muted);
 }
 
+.goal-summary-band {
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.goal-summary-toggle {
+  align-items: center;
+  background: none;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  padding: 10px 14px;
+  text-align: left;
+  width: 100%;
+}
+
+.goal-summary-toggle > span:first-child {
+  color: #4d7260;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.goal-summary-preview {
+  color: #6b8c7a;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.goal-summary-body {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 0;
+}
+
+.goal-summary-row {
+  border-bottom: 1px solid var(--line);
+  display: grid;
+  gap: 3px;
+  padding: 10px 14px;
+}
+
+.goal-summary-row:last-child {
+  border-bottom: none;
+}
+
+.goal-summary-row > span {
+  color: #8aa898;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.goal-summary-row > p {
+  color: #2d3e35;
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.goal-summary-identity > p {
+  color: #1f5c43;
+  font-style: italic;
+  font-weight: 600;
+}
+
 .goal-panel {
   background: rgba(255, 255, 255, 0.88);
   border: 1px solid var(--line);

@@ -525,6 +525,7 @@ export default function Home() {
   if (loading) return <LoadingState />;
 
   const isGoalPhase = step === "goal_area" || step === "goal_why" || step === "goal_identity" || step === "goal_complete";
+  const [goalExpanded, setGoalExpanded] = useState(false);
 
   return (
     <main className="tracker-workspace">
@@ -542,6 +543,43 @@ export default function Home() {
             <span>Plus/Elite 완료</span>
           </div>
         </div>
+
+        {(goalData.lifeArea || goalData.whyChange || goalData.identityStatement) && (
+          <section className="goal-summary-band">
+            <button
+              className="goal-summary-toggle"
+              onClick={() => setGoalExpanded((v) => !v)}
+              type="button"
+            >
+              <span>내 목표</span>
+              <span className="goal-summary-preview">
+                {goalExpanded ? "▲" : (goalData.identityStatement || goalData.lifeArea)}
+              </span>
+            </button>
+            {goalExpanded && (
+              <div className="goal-summary-body">
+                {goalData.lifeArea && (
+                  <div className="goal-summary-row">
+                    <span>삶의 영역</span>
+                    <p>{goalData.lifeArea}</p>
+                  </div>
+                )}
+                {goalData.whyChange && (
+                  <div className="goal-summary-row">
+                    <span>바꾸고 싶은 이유</span>
+                    <p>{goalData.whyChange}</p>
+                  </div>
+                )}
+                {goalData.identityStatement && (
+                  <div className="goal-summary-row goal-summary-identity">
+                    <span>정체성 문장</span>
+                    <p>"{goalData.identityStatement}"</p>
+                  </div>
+                )}
+              </div>
+            )}
+          </section>
+        )}
 
         <section className="tracker-band goal-band">
           <div className="band-title">
