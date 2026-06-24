@@ -72,8 +72,10 @@ export async function POST(request: Request) {
         role: "user",
         content: JSON.stringify({
           ...body,
+          CURRENT_STEP: body.current_step,
           current_step_goal: stepGoal(body.current_step),
           next_step_if_answer: getNextStep(body.current_step),
+          IMPORTANT_RULE: `현재 스텝은 "${body.current_step}"이다. data_patch의 field는 반드시 이 스텝에 해당하는 필드만 사용한다. 다른 레벨의 필드 저장 절대 금지.`,
         }),
       },
     ],
@@ -142,11 +144,11 @@ function stepGoal(step: OnboardingStep): string {
     case "habit_amount":
       return "얼마나 할지(시간, 양, 거리 등) habitAmount에 저장. 저장 후 next_step은 goal_complete.";
     case "mini":
-      return "Mini: 망한 날에도 할 수 있는 최소 행동. 사용자가 선택/동의하면 miniTask 저장.";
+      return "현재 스텝=mini. 저장 대상=miniTask만. 사용자가 제안하거나 동의한 행동을 miniTask에 저장하고 next_step=plus. plusTask/eliteTask 저장 금지. Mini는 가장 작은 단위(망한 날에도 가능한 것)다.";
     case "plus":
-      return "Plus: 보통 날의 기본 성공 단위. plusTask 저장.";
+      return "현재 스텝=plus. 저장 대상=plusTask만. 사용자가 제안하거나 동의한 행동을 plusTask에 저장하고 next_step=elite. miniTask/eliteTask 저장 금지. Plus는 보통 날의 기본 성공 단위다.";
     case "elite":
-      return "Elite: 여유 있는 날 도전 단위. eliteTask 저장 후 complete로 advance.";
+      return "현재 스텝=elite. 저장 대상=eliteTask만. 사용자가 제안하거나 동의한 행동을 eliteTask에 저장하고 next_step=complete. miniTask/plusTask 저장 금지. Elite는 여유 있는 날의 도전 단위다.";
     default:
       return "온보딩 완료.";
   }
