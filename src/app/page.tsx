@@ -20,6 +20,10 @@ import { useProofSession } from "@/lib/use-proof-session";
 type ElasticLevel = "mini" | "plus" | "elite";
 type CheckInStatus = ElasticCheckInStatus | "open";
 type OnboardingStep =
+  | "goal_area"
+  | "goal_why"
+  | "goal_identity"
+  | "goal_complete"
   | "habit"
   | "motive"
   | "transition"
@@ -33,6 +37,12 @@ type OnboardingStep =
   | "elite"
   | "vision"
   | "complete";
+
+type GoalData = {
+  lifeArea: string;
+  whyChange: string;
+  identityStatement: string;
+};
 
 type Message = {
   role: "assistant" | "user";
@@ -98,6 +108,11 @@ const emptyOnboarding: OnboardingData = {
   monthlyVision: "",
 };
 
+const emptyGoalData: GoalData = { lifeArea: "", whyChange: "", identityStatement: "" };
+
+const GOAL_AREA_QUESTION =
+  "요즘 가장 바꾸고 싶은 삶의 영역은 무엇인가요?\n공부, 운동, 수면, 일, 감정관리, 인간관계 중 어디에 가까운지 자유롭게 말해주세요.";
+
 const selfNarrativeKeywords = ["의지", "한심", "원래 그런", "이상해", "못하는 사람", "의지력"];
 
 const statusMeta = {
@@ -141,7 +156,8 @@ function readDebugSessionId() {
 export default function Home() {
   const { loading, userId, error } = useProofSession();
   const [mode, setMode] = useState<"onboarding" | "daily">("onboarding");
-  const [step, setStep] = useState<OnboardingStep>("habit");
+  const [step, setStep] = useState<OnboardingStep>("goal_area");
+  const [goalData, setGoalData] = useState<GoalData>(emptyGoalData);
   const [data, setData] = useState<OnboardingData>(emptyOnboarding);
   const [records, setRecords] = useState<DailyRecord[]>(createMonthRecords([]));
   const [checkIns, setCheckIns] = useState<ElasticCheckIn[]>([]);
@@ -184,10 +200,7 @@ export default function Home() {
         ]);
       } else {
         resetOnboardingState();
-        setPending(true);
-        const opening = await runOnboardingController("habit", "", emptyOnboarding);
-        assistant(opening.final.reply);
-        setPending(false);
+        assistant(GOAL_AREA_QUESTION);
       }
 
       setCheckIns(checkIns);
@@ -236,7 +249,33 @@ export default function Home() {
 
     setMessages((current) => [...current, { role: "user", text }]);
     setInput("");
-    await advanceOnboarding(text);
+
+    if (step === "goal_area" || step === "goal_why" || step === "goal_identity") {
+      await advanceGoal(text);
+    } else {
+      await advanceOnboarding(text);
+    }
+  }
+
+  async function advanceGoal(text: string) {
+    setPending(true);
+    if (step === "goal_area") {
+      setGoalData((d) => ({ ...d, lifeArea: text }));
+      assistant("왜 그 영역을 바꾸고 싶으세요?");
+      setStep("goal_why");
+    } else if (step === "goal_why") {
+      setGoalData((d) => ({ ...d, whyChange: text }));
+      assistant("이 목표가 이루어지면 어떤 사람이 되어 있을까요? 한 문장으로 말해주세요.");
+      setStep("goal_identity");
+    } else if (step === "goal_identity") {
+      const statement = await fetchIdentityStatement(goalData.lifeArea, goalData.whyChange, text);
+      setGoalData((d) => ({ ...d, identityStatement: statement }));
+      assistant(
+        `정체성 문장을 만들었어요.\n\n"${statement}"\n\n이 문장이 마음에 드시나요? 수정이 필요하면 말해주세요. 괜찮으면 아래 버튼을 눌러 습관 트래커로 넘어갑니다.`,
+      );
+      setStep("goal_complete");
+    }
+    setPending(false);
   }
 
   async function advanceOnboarding(text: string) {
@@ -248,7 +287,13 @@ export default function Home() {
   }
 
   async function handleContinueButton() {
-    if (step === "transition") {
+    if (step === "goal_complete") {
+      setPending(true);
+      setStep("habit");
+      const opening = await runOnboardingController("habit", "", emptyOnboarding);
+      assistant(opening.final.reply);
+      setPending(false);
+    } else if (step === "transition") {
       setPending(true);
       const turn = await runOnboardingController("transition", "", data);
       recordDebugEvent("transition", "[continue]", turn);
@@ -377,7 +422,8 @@ export default function Home() {
 
   function resetOnboardingState() {
     setMode("onboarding");
-    setStep("habit");
+    setStep("goal_area");
+    setGoalData(emptyGoalData);
     setData(emptyOnboarding);
     setRecords(createMonthRecords([]));
     setCheckIns([]);
@@ -432,8 +478,13 @@ export default function Home() {
 
   if (loading) return <LoadingState />;
 
+  const isGoalPhase = step === "goal_area" || step === "goal_why" || step === "goal_identity" || step === "goal_complete";
+
   return (
     <main className="tracker-workspace">
+      {isGoalPhase ? (
+        <GoalPanel goalData={goalData} step={step} />
+      ) : (
       <section className="tracker-panel" aria-label="Elastic habit tracker">
         <div className="tracker-header">
           <div>
@@ -559,6 +610,7 @@ export default function Home() {
           })}
         </section>
       </section>
+      )}
 
       <aside className="chat-panel" aria-label="Proof onboarding and check-in">
         <div className="chat-title">
@@ -720,11 +772,16 @@ function OnboardingComposer({
     event.currentTarget.form?.requestSubmit();
   }
 
-  if (step === "transition" || step === "elastic_intro") {
-    const label = step === "transition" ? "최근 실패 구체화로" : "Mini / Plus / Elite 설정하기";
+  if (step === "goal_complete" || step === "transition" || step === "elastic_intro") {
+    const label =
+      step === "goal_complete"
+        ? "습관 트래커로 넘어갈게요"
+        : step === "transition"
+          ? "최근 실패 구체화로"
+          : "Mini / Plus / Elite 설정하기";
     return (
       <button className="primary-button" disabled={pending} onClick={onContinue} type="button">
-        {pending ? "GPT가 다음 질문을 준비하는 중" : label}
+        {pending ? "준비하는 중…" : label}
       </button>
     );
   }
@@ -982,6 +1039,10 @@ function toOnboardingPatch(dataPatch: Partial<OnboardingData>): OnboardingContro
 
 function getNextOnboardingStep(currentStep: OnboardingStep): OnboardingStep {
   const steps: OnboardingStep[] = [
+    "goal_area",
+    "goal_why",
+    "goal_identity",
+    "goal_complete",
     "habit",
     "motive",
     "transition",
@@ -1130,6 +1191,60 @@ function getBonusItems(levelCounts: { mini: number; plus: number; elite: number;
     bonuses.push({ label: "30일 모두 기록", points: 20 });
   }
   return bonuses;
+}
+
+async function fetchIdentityStatement(lifeArea: string, whyChange: string, visionText: string): Promise<string> {
+  try {
+    const response = await fetch("/api/elastic/generate-identity", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ life_area: lifeArea, why_change: whyChange, vision_text: visionText }),
+    });
+    if (!response.ok) throw new Error("Failed");
+    const body = (await response.json()) as { statement: string };
+    return body.statement;
+  } catch {
+    return `나는 ${lifeArea || "이 영역"}에서 매일 작은 증거를 쌓아가는 사람이다.`;
+  }
+}
+
+function GoalPanel({ goalData, step }: { goalData: GoalData; step: OnboardingStep }) {
+  const fields: { label: string; value: string; active: boolean; isIdentity?: boolean }[] = [
+    {
+      label: "삶의 영역",
+      value: goalData.lifeArea,
+      active: step === "goal_area",
+    },
+    {
+      label: "바꾸고 싶은 이유",
+      value: goalData.whyChange,
+      active: step === "goal_why",
+    },
+    {
+      label: "정체성 문장",
+      value: goalData.identityStatement,
+      active: step === "goal_identity" || step === "goal_complete",
+      isIdentity: true,
+    },
+  ];
+
+  return (
+    <section className="goal-panel" aria-label="목표 설정">
+      <div className="goal-panel-header">
+        <p className="eyebrow">목표 설정</p>
+        <h1>내 삶의 기준</h1>
+        <p className="goal-panel-desc">목표를 구체화하면 매일의 행동이 더 선명해집니다.</p>
+      </div>
+      <div className="goal-template">
+        {fields.map((field) => (
+          <div key={field.label} className={`goal-field${field.active ? " goal-field-active" : ""}${field.isIdentity ? " goal-field-identity" : ""}`}>
+            <span className="goal-field-label">{field.label}</span>
+            <p className="goal-field-value">{field.value || "대화로 채워집니다"}</p>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
 }
 
 function createScorecardSummary(checkIns: ElasticCheckIn[]) {
