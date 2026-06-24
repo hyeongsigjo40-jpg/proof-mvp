@@ -23,6 +23,9 @@ type OnboardingStep =
   | "goal_area"
   | "goal_why"
   | "goal_identity"
+  | "failure_situation"
+  | "failure_feeling"
+  | "bridge"
   | "habit_action"
   | "habit_period"
   | "habit_frequency"
@@ -49,6 +52,8 @@ type OnboardingData = {
   lifeArea: string;
   whyChange: string;
   goalIdentityStatement: string;
+  failureSituation: string;
+  failureFeeling: string;
   habitAction: string;
   habitPeriod: string;
   habitFrequency: string;
@@ -94,6 +99,8 @@ const emptyOnboarding: OnboardingData = {
   lifeArea: "",
   whyChange: "",
   goalIdentityStatement: "",
+  failureSituation: "",
+  failureFeeling: "",
   habitAction: "",
   habitPeriod: "",
   habitFrequency: "",
@@ -277,6 +284,10 @@ export default function Home() {
   }
 
   async function handleContinueButton() {
+    if (step === "bridge") {
+      setStep("habit_action");
+      assistant("어떤 행동을 습관으로 만들고 싶으세요? 구체적일수록 좋아요.\n예: 토익 LC 10분 듣기, 저녁 러닝 3km");
+    }
     if (step === "goal_complete") {
       setStep("mini");
       assistant(MINI_OPENING(data.habitAction || "이 습관"));
@@ -392,8 +403,8 @@ export default function Home() {
       habit_amount: nextData.habitAmount || null,
       identity_motive: "",
       motive_summary: null,
-      recent_failure_date: null,
-      pre_breakdown_feeling: null,
+      recent_failure_date: nextData.failureSituation || null,
+      pre_breakdown_feeling: nextData.failureFeeling || null,
       actual_breakdown_behavior: null,
       recovery_method: null,
       mini_task: nextData.miniTask,
@@ -724,6 +735,7 @@ export default function Home() {
 
 const ALL_STEPS: OnboardingStep[] = [
   "goal_area", "goal_why", "goal_identity",
+  "failure_situation", "failure_feeling", "bridge",
   "habit_action", "habit_period", "habit_frequency", "habit_when", "habit_amount",
   "goal_complete", "mini", "plus", "elite", "complete",
 ];
@@ -911,6 +923,14 @@ function OnboardingComposer({
 
     event.preventDefault();
     event.currentTarget.form?.requestSubmit();
+  }
+
+  if (step === "bridge") {
+    return (
+      <button className="primary-button" disabled={pending} onClick={onContinue} type="button">
+        이제 습관 만들러 가기
+      </button>
+    );
   }
 
   if (step === "goal_complete") {
@@ -1156,6 +1176,8 @@ function mapProfileToData(profile: ElasticProfile): OnboardingData {
     lifeArea: profile.life_area ?? "",
     whyChange: profile.why_change ?? "",
     goalIdentityStatement: profile.identity_statement ?? "",
+    failureSituation: profile.recent_failure_date ?? "",
+    failureFeeling: profile.pre_breakdown_feeling ?? "",
     habitAction: profile.habit_action ?? profile.habit_name ?? "",
     habitPeriod: profile.habit_period ?? "",
     habitFrequency: profile.habit_frequency ?? "",
@@ -1295,6 +1317,11 @@ function GoalPanel({ data, goalData, step }: { data: OnboardingData; goalData: G
     { label: "얼마나", value: data.habitAmount, active: step === "habit_amount", placeholder: "예: 10분" },
   ];
 
+  const patternFields: { label: string; value: string; active: boolean }[] = [
+    { label: "최근 실패 상황", value: data.failureSituation, active: step === "failure_situation" },
+    { label: "그때 든 생각/감정", value: data.failureFeeling, active: step === "failure_feeling" },
+  ];
+
   const smartSentence = buildSmartSentence(data);
   const isHabitComplete = step === "goal_complete";
 
@@ -1317,6 +1344,18 @@ function GoalPanel({ data, goalData, step }: { data: OnboardingData; goalData: G
                 isIdentity={field.isIdentity}
                 empty={<span className="goal-empty-line" />}
               />
+            </p>
+          </div>
+        ))}
+      </div>
+
+      <div className="goal-template goal-pattern-template">
+        <p className="goal-section-label">나의 패턴</p>
+        {patternFields.map((field) => (
+          <div key={field.label} className={`goal-field${field.active ? " goal-field-active" : ""}`}>
+            <span className="goal-field-label">{field.label}</span>
+            <p className="goal-field-value">
+              <TypedField value={field.value} empty={<span className="goal-empty-line" />} />
             </p>
           </div>
         ))}

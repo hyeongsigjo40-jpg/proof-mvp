@@ -5,6 +5,9 @@ type OnboardingStep =
   | "goal_area"
   | "goal_why"
   | "goal_identity"
+  | "failure_situation"
+  | "failure_feeling"
+  | "bridge"
   | "habit_action"
   | "habit_period"
   | "habit_frequency"
@@ -20,6 +23,8 @@ type OnboardingData = {
   lifeArea?: string;
   whyChange?: string;
   goalIdentityStatement?: string;
+  failureSituation?: string;
+  failureFeeling?: string;
   habitAction?: string;
   habitPeriod?: string;
   habitFrequency?: string;
@@ -49,6 +54,7 @@ const model = process.env.OPENAI_MODEL || "gpt-5.4-mini";
 
 const stepOrder: OnboardingStep[] = [
   "goal_area", "goal_why", "goal_identity",
+  "failure_situation", "failure_feeling", "bridge",
   "habit_action", "habit_period", "habit_frequency", "habit_when", "habit_amount",
   "goal_complete", "mini", "plus", "elite", "complete",
 ];
@@ -66,7 +72,7 @@ export async function POST(request: Request) {
       {
         role: "system",
         content:
-          "너는 Proof 온보딩 진행자다. data 객체에 사용자가 이미 말한 정보가 담겨 있다. 항상 활용한다.\n\n[목표 파트: goal_area→goal_why→goal_identity]\n자연스러운 대화로 진행. goal_identity에서 '나는 [이전 패턴]이 아니라, [새 행동 정체성]인 사람이다.' 형태 문장을 goalIdentityStatement에 저장.\n\n[습관 목표 파트: habit_action→habit_period→habit_frequency→habit_when→habit_amount]\nSMART 습관 문장을 한 필드씩 채워나간다. 각 필드에 해당하는 답변이 오면 저장 후 advance. 불명확하면 예시를 들어 도와준다.\n- habit_action: 구체적인 행동 (예: 토익 LC 듣기, 런닝)\n- habit_period: 며칠/몇 주 (예: 4주, 14일)\n- habit_frequency: 주 몇 회 또는 매일 (예: 주 5회, 매일)\n- habit_when: 언제/어떤 상황 (예: 저녁 식사 후, 아침 7시)\n- habit_amount: 얼마나 (예: 10분, 3km)\n\n[goal_complete] 버튼으로 처리, 직접 호출 안 함.\n\n[mini→plus→elite 수정 규칙]\n- 기본 흐름: mini→plus→elite 순서로 진행.\n- 사용자가 이미 지나간 레벨을 수정하려 하면(예: plus 스텝에서 'mini를 바꾸고 싶어'): 해당 레벨 필드에 저장하고 next_step을 그 레벨로 되돌린다(예: next_step=mini). 그러면 UI가 다시 그 레벨로 돌아가 다음 단계로 자연스럽게 이어진다.\n- 저장할 필드는 사용자가 말하는 레벨(mini/plus/elite)에 맞게 결정한다. 현재 스텝이 아닌 사용자 의도 기준.\n\n공통: 정체성 평가·의지력 판단·죄책감 유발 금지. reply는 한국어 1-2문장.",
+          "너는 Proof 온보딩 진행자다. data 객체에 사용자가 이미 말한 정보가 담겨 있다. 항상 활용한다.\n\n[목표 파트: goal_area→goal_why→goal_identity]\n자연스러운 대화로 진행. goal_identity에서 '나는 [이전 패턴]이 아니라, [새 행동 정체성]인 사람이다.' 형태 문장을 goalIdentityStatement에 저장.\n\n[패턴 파트: failure_situation→failure_feeling→bridge]\n- failure_situation: 최근에 목표를 향해 가다가 흐트러졌던 구체적인 상황을 파악한다. 판단 없이. failureSituation에 저장.\n- failure_feeling: 그때 든 생각이나 감정을 파악한다. failureFeeling에 저장 후 next_step=bridge.\n- bridge: 사용자의 실패 상황(failureSituation)과 감정(failureFeeling)을 직접 언급하며, 이것이 의지력 문제가 아니라 목표가 상황에 맞게 유연하지 않아서임을 설명한다. 그래서 Proof가 SMART 목표와 Elastic Habit 방식을 쓰는 이유를 2-3문장으로 설명한다. should_advance=true, next_step=bridge, data_patch=[].\n\n[습관 목표 파트: habit_action→habit_period→habit_frequency→habit_when→habit_amount]\nSMART 습관 문장을 한 필드씩 채워나간다.\n- habit_action: 구체적인 행동\n- habit_period: 며칠/몇 주\n- habit_frequency: 주 몇 회 또는 매일\n- habit_when: 언제/어떤 상황\n- habit_amount: 얼마나\n\n[goal_complete] 버튼으로 처리, 직접 호출 안 함.\n\n[mini→plus→elite 수정 규칙]\n사용자가 이전 레벨을 수정하려 하면 해당 필드에 저장하고 next_step을 그 레벨로 되돌린다.\n\n공통: 정체성 평가·의지력 판단·죄책감 유발 금지. reply는 한국어 1-3문장.",
       },
       {
         role: "user",
@@ -102,6 +108,7 @@ export async function POST(request: Request) {
                     type: "string",
                     enum: [
                       "lifeArea", "whyChange", "goalIdentityStatement",
+                      "failureSituation", "failureFeeling",
                       "habitAction", "habitPeriod", "habitFrequency", "habitWhen", "habitAmount",
                       "miniTask", "plusTask", "eliteTask",
                     ],
@@ -132,7 +139,13 @@ function stepGoal(step: OnboardingStep): string {
     case "goal_why":
       return "왜 그 영역을 바꾸고 싶은지 파악한다. whyChange에 저장 후 advance.";
     case "goal_identity":
-      return "'나는 [이전 패턴]이 아니라, [새 행동 정체성]인 사람이다.' 형태 문장을 goalIdentityStatement에 저장 후 habit_action으로 advance. reply에 문장을 quote로 보여주고 바로 다음 질문(어떤 행동을 습관으로 만들고 싶으세요?)을 이어서 한다.";
+      return "'나는 [이전 패턴]이 아니라, [새 행동 정체성]인 사람이다.' 형태 문장을 goalIdentityStatement에 저장 후 failure_situation으로 advance. reply에 문장을 quote로 보여주고, 이 목표를 향해 가다가 최근에 흐트러졌던 상황이 있었는지 자연스럽게 물어본다.";
+    case "failure_situation":
+      return "최근에 목표를 지키지 못했던 구체적인 상황을 파악한다. 판단 없이. failureSituation에 저장 후 failure_feeling으로 advance.";
+    case "failure_feeling":
+      return "그때 어떤 생각이나 감정이 들었는지 파악한다. failureFeeling에 저장 후 next_step=bridge로 advance.";
+    case "bridge":
+      return "사용자의 failureSituation과 failureFeeling을 직접 언급하며 공감한다. 이것이 의지력 문제가 아니라 목표가 상황에 맞게 유연하지 않아서임을 설명한다. 그래서 Proof가 SMART 목표로 행동을 구체화하고, Elastic Habit으로 망한 날에도 Mini 하나면 성공인 유연한 기준을 만든다고 설명한다. 마지막에 '이제 같이 만들어볼까요?'로 마무리. should_advance=true, next_step=bridge, data_patch=[].";
     case "habit_action":
       return "구체적인 행동을 habitAction에 저장. 막연하면 예시 들어 도와준다. 답변 오면 advance.";
     case "habit_period":
@@ -163,8 +176,16 @@ function fallbackTurn(body: OnboardingControllerRequest): OnboardingControllerRe
       return advance("goal_why", { whyChange: text }, "이 목표가 이루어지면 어떤 사람이 되어 있을까요? 한 문장으로 말해주세요.");
     case "goal_identity": {
       const statement = `나는 ${body.data.lifeArea || "이 영역"}에서 매일 작은 증거를 쌓아가는 사람이다.`;
-      return advance("goal_identity", { goalIdentityStatement: statement }, `"${statement}"\n\n그럼 구체적으로 어떤 행동을 습관으로 만들고 싶으세요?`);
+      return advance("goal_identity", { goalIdentityStatement: statement }, `"${statement}"\n\n이 목표를 향해 가다가 최근에 흐트러졌던 순간이 있었나요? 어떤 상황이었어요?`);
     }
+    case "failure_situation":
+      return advance("failure_situation", { failureSituation: text }, "그때 어떤 생각이나 감정이 들었어요?");
+    case "failure_feeling": {
+      const situation = body.data.failureSituation || "그 상황";
+      return advance("failure_feeling", { failureFeeling: text }, `${situation}에서 ${text}했던 거잖아요. 이건 의지력 문제가 아니라, 목표가 그날의 상황에 맞게 유연하지 않아서예요.\n\n그래서 Proof는 SMART 목표로 행동을 구체화하고, Elastic Habit으로 망한 날에도 Mini 하나면 성공인 기준을 만들어요. 이제 같이 만들어볼까요?`);
+    }
+    case "bridge":
+      return { intent: "continue", should_advance: true, next_step: "bridge", data_patch: [], reply: "" };
     case "habit_action":
       return advance("habit_action", { habitAction: text }, "며칠 동안 실험해볼까요? 7일, 14일, 28일 중 선택해주세요.");
     case "habit_period":
