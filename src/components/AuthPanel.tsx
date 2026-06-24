@@ -1,25 +1,36 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import { Mail } from "lucide-react";
+import { Lock, Mail } from "lucide-react";
 import { hasSupabaseConfig } from "@/lib/supabase";
-import { signInWithEmail } from "@/lib/proof-store";
+import { signInWithPassword, signUpWithPassword } from "@/lib/proof-store";
 
 export function AuthPanel() {
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    await authenticate("login");
+  }
+
+  async function authenticate(mode: "login" | "signup") {
     setPending(true);
     setMessage(null);
 
     try {
-      await signInWithEmail(email);
-      setMessage("메일함에서 로그인 링크를 확인해주세요.");
+      if (mode === "login") {
+        await signInWithPassword(email, password);
+        setMessage("로그인했어요. 화면을 새로 불러옵니다.");
+      } else {
+        await signUpWithPassword(email, password);
+        setMessage("계정을 만들었어요. 이메일 확인 설정이 켜져 있으면 확인 후 로그인됩니다.");
+      }
+      window.location.reload();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "메일을 보내지 못했어요.");
+      setMessage(error instanceof Error ? error.message : "인증을 처리하지 못했어요.");
     } finally {
       setPending(false);
     }
@@ -48,9 +59,29 @@ export function AuthPanel() {
           placeholder="you@example.com"
         />
       </div>
-      <button className="primary-button" disabled={pending} type="submit">
-        {pending ? "보내는 중" : "로그인 링크 받기"}
-      </button>
+
+      <label htmlFor="password">비밀번호</label>
+      <div className="input-with-icon">
+        <Lock size={18} aria-hidden="true" />
+        <input
+          id="password"
+          type="password"
+          required
+          minLength={6}
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+          placeholder="6자 이상"
+        />
+      </div>
+
+      <div className="auth-actions">
+        <button className="primary-button" disabled={pending} type="submit">
+          {pending ? "처리 중" : "로그인"}
+        </button>
+        <button className="secondary-action no-margin" disabled={pending} onClick={() => void authenticate("signup")} type="button">
+          계정 만들기
+        </button>
+      </div>
       {message ? <p className="form-message">{message}</p> : null}
     </form>
   );

@@ -27,7 +27,7 @@ APP_URL=http://localhost:3000
 CRON_SECRET=...
 ```
 
-3. Supabase Auth에서 Email OTP/Magic Link를 활성화합니다.
+3. Supabase Auth에서 Email provider를 활성화합니다. 현재 앱은 이메일+비밀번호 로그인/회원가입을 사용합니다.
 4. 기존 `profiles` 테이블을 이미 만들었다면 `supabase-coach-migration.sql`도 실행합니다.
 5. 카카오 디벨로퍼스에서 Redirect URI에 `APP_URL/api/kakao/callback`을 등록하고, 동의항목에서 카카오톡 메시지 전송 권한을 활성화합니다.
 6. 현재 Elastic Habit 단일 화면 구조를 쓰려면 `supabase-elastic-migration.sql`을 Supabase SQL Editor에서 실행합니다.

@@ -148,6 +148,12 @@ a {
   gap: 18px;
 }
 
+.auth-actions {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 1fr 1fr;
+}
+
 .field {
   border: 0;
   display: grid;
@@ -1126,7 +1132,8 @@ blockquote {
   }
 
   .checkin-buttons,
-  .daily-actions {
+  .daily-actions,
+  .auth-actions {
     grid-template-columns: 1fr 1fr;
   }
 }
@@ -1158,6 +1165,7 @@ blockquote {
 
   .segmented-options,
   .result-grid,
+  .auth-actions,
   .count-row,
   .record-item {
     grid-template-columns: 1fr;

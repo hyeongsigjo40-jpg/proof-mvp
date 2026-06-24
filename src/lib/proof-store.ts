@@ -96,6 +96,36 @@ export async function signInWithEmail(email: string) {
   }
 }
 
+export async function signInWithPassword(email: string, password: string) {
+  if (!supabase) {
+    return;
+  }
+
+  const { error } = await supabase.auth.signInWithPassword({
+    email,
+    password,
+  });
+
+  if (error) {
+    throw error;
+  }
+}
+
+export async function signUpWithPassword(email: string, password: string) {
+  if (!supabase) {
+    return;
+  }
+
+  const { error } = await supabase.auth.signUp({
+    email,
+    password,
+  });
+
+  if (error) {
+    throw error;
+  }
+}
+
 export async function signOut() {
   if (supabase) {
     await supabase.auth.signOut();
