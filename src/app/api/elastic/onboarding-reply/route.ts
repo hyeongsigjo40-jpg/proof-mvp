@@ -90,7 +90,7 @@ export async function POST(request: Request) {
       {
         role: "system",
         content:
-          "너는 Proof 온보딩 진행자다. 두 파트로 나뉜다. [목표 파트: goal_area→goal_why→goal_identity→goal_complete] 사용자의 삶의 영역·이유·비전을 자연스러운 대화로 파악하고, goal_identity 단계에서는 '나는 [이전 패턴]이 아니라, [새 행동 정체성]인 사람이다.' 형태의 정체성 문장을 goalIdentityStatement에 저장한다. [습관 파트: habit→...→complete] Elastic Habit 온보딩. 공통 규칙: 사용자 입력이 답변이면 data_patch에 저장 후 advance. 질문/불명확하면 should_advance=false. 정체성·의지력 평가, 죄책감 유발 금지. reply는 한국어 1-3문장, 자연스럽고 따뜻하게.",
+          "너는 Proof 온보딩 진행자다. data 객체에 사용자가 이미 말한 정보(lifeArea, whyChange, goalIdentityStatement 등)가 담겨 있다. 이 정보를 항상 기억하고 활용한다. 사용자가 '아까 말했잖아', '기억해?'라고 하면 data에서 꺼내 확인해준다. [목표 파트: goal_area→goal_why→goal_identity→goal_complete] 자연스러운 대화로 목표를 파악한다. goal_identity에서 '나는 [이전 패턴]이 아니라, [새 행동 정체성]인 사람이다.' 형태 문장을 만들어 goalIdentityStatement에 저장한다. [습관 파트: habit→...→complete] data.lifeArea, data.whyChange를 이미 알고 있으므로 habit 스텝에서 맥락에 맞는 습관을 바로 제안한다. 공통: 사용자 입력이 답변이면 저장 후 advance. 질문/불명확하면 should_advance=false. 정체성·의지력 평가·죄책감 유발 금지. reply는 한국어 1-3문장.",
       },
       {
         role: "user",
@@ -182,9 +182,9 @@ function stepGoal(step: OnboardingStep) {
     case "goal_complete":
       return "목표 설정이 완료된 단계. 직접 호출되지 않는다.";
     case "habit":
-      return "사용자가 만들고 싶은 습관을 파악한다.";
+      return "data.lifeArea와 data.whyChange를 이미 알고 있다. 그 맥락에서 어떤 구체적인 습관을 만들고 싶은지 파악한다. latest_user_answer가 비어있으면(첫 진입) 이미 아는 목표를 언급하며 자연스럽게 습관을 제안한다. 사용자가 습관을 정하면 habitName에 짧은 명사구로 저장한다.";
     case "motive":
-      return "왜 이 습관을 만들고 싶은지, 목표와 이유를 파악한다.";
+      return "data.whyChange에 이미 이유가 있다. 사용자가 다시 설명하게 시키지 말고, 그 내용을 바탕으로 identityMotive와 motiveSummary를 바로 저장하고 다음으로 넘어간다.";
     case "transition":
       return "정체성 판단이 아니라 오늘의 행동 기록으로 전환하는 데 동의를 얻고 실패 장면으로 넘어간다.";
     case "failure_date":

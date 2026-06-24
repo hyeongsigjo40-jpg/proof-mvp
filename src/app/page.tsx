@@ -306,7 +306,7 @@ export default function Home() {
     if (step === "goal_complete") {
       setPending(true);
       setStep("habit");
-      const opening = await runOnboardingController("habit", "", emptyOnboarding);
+      const opening = await runOnboardingController("habit", "", data);
       assistant(opening.final.reply);
       setPending(false);
     } else if (step === "transition") {
