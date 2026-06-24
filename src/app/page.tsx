@@ -781,14 +781,19 @@ function OnboardingDebugPanel({
     ["Elite", data.eliteTask],
   ];
 
+  const [open, setOpen] = useState(false);
+
   return (
     <section className="debug-panel" aria-label="온보딩 디버그">
-      <div className="debug-header-row">
+      <button className="debug-header-row debug-toggle" onClick={() => setOpen((v) => !v)} type="button">
         <strong className="debug-current-step">{step}</strong>
         <span className="debug-meta-inline">
           {scope} · {sessionId.slice(0, 8)}
         </span>
-      </div>
+        <span className="debug-toggle-arrow">{open ? "▲" : "▼"}</span>
+      </button>
+
+      {!open ? null : (<>
 
       {/* Step progress */}
       <div className="debug-step-progress">
@@ -871,6 +876,7 @@ function OnboardingDebugPanel({
           <p>아직 턴이 없습니다.</p>
         )}
       </details>
+      </>)}
     </section>
   );
 }

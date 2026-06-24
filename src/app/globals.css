@@ -1377,6 +1377,21 @@ blockquote {
   justify-content: space-between;
 }
 
+.debug-toggle {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px 0;
+  text-align: left;
+  width: 100%;
+}
+
+.debug-toggle-arrow {
+  color: #666;
+  font-size: 10px;
+  margin-left: auto;
+}
+
 .debug-current-step {
   color: #7edea0;
   font-size: 13px;
