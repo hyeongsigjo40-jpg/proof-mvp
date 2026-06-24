@@ -650,7 +650,7 @@ export default function Home() {
           <MessageCircle size={18} aria-hidden="true" />
           <div>
             <strong>{mode === "onboarding" ? "Proof Onboarding" : "Daily Check-in"}</strong>
-            <span>{mode === "onboarding" ? "AI 진행형 온보딩" : "Supabase 저장 연결됨"}</span>
+            <span>{mode === "onboarding" ? "챗봇 온보딩" : "Supabase 저장 연결됨"}</span>
           </div>
         </div>
 
