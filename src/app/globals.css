@@ -986,11 +986,9 @@ blockquote {
   box-sizing: border-box;
   font-size: 14px;
   line-height: 1.5;
-  max-height: calc(7.5em + 22px);
   max-width: 88%;
   min-width: 0;
   overflow-wrap: anywhere;
-  overflow-y: auto;
   padding: 11px 12px;
   white-space: pre-wrap;
   word-break: break-word;
