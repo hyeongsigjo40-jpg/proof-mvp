@@ -120,6 +120,8 @@ const emptyGoalData: GoalData = { lifeArea: "", whyChange: "", identityStatement
 
 const GOAL_AREA_QUESTION =
   "요즘 가장 바꾸고 싶은 삶의 영역은 무엇인가요?\n공부, 운동, 수면, 일, 감정관리, 인간관계 중 어디에 가까운지 자유롭게 말해주세요.";
+const DAILY_CHECKIN_PROMPT =
+  "오늘의 습관은 어떤 흐름이었나요?\n오늘의 패턴을 남겨볼게요. 실행 여부보다, 어떤 조건에서 움직였고 어디서 막혔는지가 더 중요해요.";
 
 const selfNarrativeKeywords = ["의지", "한심", "원래 그런", "이상해", "못하는 사람", "의지력"];
 
@@ -200,7 +202,7 @@ export default function Home() {
         setMessages([
           {
             role: "assistant",
-            text: "오늘의 패턴을 남겨볼게요. 실행 여부보다, 어떤 조건에서 움직였고 어디서 막혔는지가 더 중요해요.",
+            text: DAILY_CHECKIN_PROMPT,
           },
         ]);
       } else {
@@ -336,6 +338,7 @@ export default function Home() {
       setNextElite(nextData.eliteTask);
       await persistProfile(nextData);
       setMode("daily");
+      assistant(DAILY_CHECKIN_PROMPT);
     }
   }
 
@@ -343,49 +346,43 @@ export default function Home() {
     setSelectedCheckIn(status);
   }
 
-  async function saveDailyCheckIn() {
-    if (!selectedCheckIn || !userId || selectedCheckIn === "open" || dailyPatternTurns.length === 0) return;
-
-    const patternMemo = createPatternMemo(selectedCheckIn, dailyPatternTurns);
-    const hasSelfNarrative = selfNarrativeKeywords.some((keyword) => patternMemo.includes(keyword));
-    const saved = await saveElasticCheckIn({
-      user_id: userId,
-      scope: storageScope,
-      result: selectedCheckIn,
-      memo: patternMemo,
-      self_narrative_detected: hasSelfNarrative,
-    });
-    applySavedCheckIn(saved);
-    const nextCheckIns = upsertCheckIn(checkIns, saved);
-    setCheckIns(nextCheckIns);
-    const contextualReply = await createContextualReply("checkin_saved", data, nextCheckIns);
-    setMessages((current) => [
-      ...current,
-      ...(hasSelfNarrative
-        ? [{ role: "assistant" as const, text: "기억하시죠, 오늘은 그 사람인지가 아니라 이 행동을 했는지만 보기로 했었죠" }]
-        : []),
-      { role: "assistant", text: contextualReply },
-    ]);
-    setMiniFailureCount((current) => (selectedCheckIn === "not_done" ? current + 1 : 0));
-    setMemo(patternMemo);
-    setDailyPatternTurns([]);
-    setPatternInput("");
-    setSaveMessage("오늘의 패턴 기록을 저장했어요.");
-  }
-
-  function submitDailyPattern(text: string) {
+  async function saveDailyCheckIn(status: Exclude<CheckInStatus, "open" | "no_response">, text: string) {
     const trimmed = text.trim();
-    if (!trimmed) return;
+    if (!userId || !trimmed) return;
 
-    const reply = createPatternCoachReply(selectedCheckIn, trimmed, dailyPatternTurns.length);
-    setDailyPatternTurns((current) => [...current, { user: trimmed, assistant: reply }]);
-    setMessages((current) => [
-      ...current,
-      { role: "user", text: trimmed },
-      { role: "assistant", text: reply },
-    ]);
-    setPatternInput("");
-    setSaveMessage(null);
+    setPending(true);
+    try {
+      const coachReply = createPatternCoachReply(status, trimmed, 0);
+      const patternTurns = [{ user: trimmed, assistant: coachReply }];
+      const patternMemo = createPatternMemo(status, patternTurns);
+      const hasSelfNarrative = selfNarrativeKeywords.some((keyword) => patternMemo.includes(keyword));
+      const saved = await saveElasticCheckIn({
+        user_id: userId,
+        scope: storageScope,
+        result: status,
+        memo: patternMemo,
+        self_narrative_detected: hasSelfNarrative,
+      });
+      applySavedCheckIn(saved);
+      const nextCheckIns = upsertCheckIn(checkIns, saved);
+      setCheckIns(nextCheckIns);
+      const contextualReply = await createContextualReply("checkin_saved", data, nextCheckIns);
+      setMessages((current) => [
+        ...current,
+        { role: "user", text: `${statusMeta[status].label}\n${trimmed}` },
+        ...(hasSelfNarrative
+          ? [{ role: "assistant" as const, text: "기억하시죠, 오늘은 그 사람인지가 아니라 이 행동을 했는지만 보기로 했었죠" }]
+          : []),
+        { role: "assistant", text: `${coachReply}\n\n${contextualReply}` },
+      ]);
+      setMiniFailureCount((current) => (status === "not_done" ? current + 1 : 0));
+      setMemo(patternMemo);
+      setDailyPatternTurns(patternTurns);
+      setPatternInput("");
+      setSaveMessage(null);
+    } finally {
+      setPending(false);
+    }
   }
 
   async function saveNextPlan() {
@@ -527,7 +524,7 @@ export default function Home() {
     setMessages([
       {
         role: "assistant",
-        text: "[debug] 데일리 체크인으로 바로 이동했어요.\n오늘의 패턴을 남겨볼게요. 실행 여부보다, 어떤 조건에서 움직였고 어디서 막혔는지가 더 중요해요.",
+        text: `[debug] 데일리 체크인으로 바로 이동했어요.\n${DAILY_CHECKIN_PROMPT}`,
       },
     ]);
     setSaveMessage(null);
@@ -767,21 +764,12 @@ export default function Home() {
               />
             ) : (
               <DailyCheckIn
-                data={data}
-                nextElite={nextElite}
-                nextMini={nextMini}
-                nextPlus={nextPlus}
+                pending={pending}
                 patternInput={patternInput}
-                patternTurns={dailyPatternTurns}
                 selectedCheckIn={selectedCheckIn}
                 setPatternInput={setPatternInput}
-                setNextElite={setNextElite}
-                setNextMini={setNextMini}
-                setNextPlus={setNextPlus}
                 onCheckIn={handleCheckIn}
-                onPatternSubmit={submitDailyPattern}
                 onSaveCheckIn={saveDailyCheckIn}
-                onSavePlan={saveNextPlan}
               />
             )}
 
@@ -1091,116 +1079,76 @@ function OnboardingComposer({
 }
 
 function DailyCheckIn({
-  data,
-  nextElite,
-  nextMini,
-  nextPlus,
+  pending,
   patternInput,
-  patternTurns,
   selectedCheckIn,
   setPatternInput,
-  setNextElite,
-  setNextMini,
-  setNextPlus,
   onCheckIn,
-  onPatternSubmit,
   onSaveCheckIn,
-  onSavePlan,
 }: {
-  data: OnboardingData;
-  nextElite: string;
-  nextMini: string;
-  nextPlus: string;
+  pending: boolean;
   patternInput: string;
-  patternTurns: DailyPatternTurn[];
   selectedCheckIn: CheckInStatus | null;
   setPatternInput: (value: string) => void;
-  setNextElite: (value: string) => void;
-  setNextMini: (value: string) => void;
-  setNextPlus: (value: string) => void;
   onCheckIn: (status: Exclude<CheckInStatus, "open" | "no_response">) => void;
-  onPatternSubmit: (text: string) => void;
-  onSaveCheckIn: () => void;
-  onSavePlan: () => void;
+  onSaveCheckIn: (status: Exclude<CheckInStatus, "open" | "no_response">, text: string) => void;
 }) {
   function handlePatternSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    onPatternSubmit(patternInput);
+    if (!selectedCheckIn || selectedCheckIn === "open" || selectedCheckIn === "no_response") return;
+    onSaveCheckIn(selectedCheckIn, patternInput);
+  }
+
+  function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+
+    event.preventDefault();
+    event.currentTarget.form?.requestSubmit();
   }
 
   return (
-    <div className="daily-panel">
-      <section className="daily-card">
-        <div className="daily-intro">
-          <strong>오늘 {data.habitAction || "습관"}은 어떤 흐름이었나요?</strong>
-          <p>오늘의 패턴을 남겨볼게요. 실행 여부보다, 어떤 조건에서 움직였고 어디서 막혔는지가 더 중요해요.</p>
-        </div>
-        <div className="checkin-buttons">
-          <button className={selectedCheckIn === "mini" ? "selected mini" : "mini"} onClick={() => onCheckIn("mini")} type="button">
-            Mini
-          </button>
-          <button className={selectedCheckIn === "plus" ? "selected plus" : "plus"} onClick={() => onCheckIn("plus")} type="button">
-            Plus
-          </button>
-          <button className={selectedCheckIn === "elite" ? "selected elite" : "elite"} onClick={() => onCheckIn("elite")} type="button">
-            Elite
-          </button>
-          <button
-            className={selectedCheckIn === "not_done" ? "selected not-done" : "not-done"}
-            onClick={() => onCheckIn("not_done")}
-            type="button"
-          >
-            기록만함
-          </button>
-        </div>
-
-        <div className="pattern-prompt">
-          <span>패턴 대화</span>
-          <p>잘 된 조건, 막힌 지점, 시작 전 상태 중 하나만 적어도 충분해요.</p>
-        </div>
-
-        <form className="pattern-composer" onSubmit={handlePatternSubmit}>
-          <textarea
-            value={patternInput}
-            onChange={(event) => setPatternInput(event.target.value)}
-            placeholder="예: 퇴근하고 바로 누우니까 다시 시작하기가 어려웠어요."
-            rows={3}
-          />
-          <button className="secondary-action no-margin" disabled={!patternInput.trim()} type="submit">
-            대화 남기기
-          </button>
-        </form>
-
-        <p className="pattern-save-hint">
-          {patternTurns.length > 0
-            ? `${patternTurns.length}개 대화가 기록에 포함됩니다.`
-            : "한 문장 이상 남기면 오늘의 습관 기록을 저장할 수 있어요."}
-        </p>
-        <div className="daily-actions">
-          <button className="primary-button" disabled={!selectedCheckIn || patternTurns.length === 0} onClick={onSaveCheckIn} type="button">
-            오늘의 습관 기록 저장하기
-          </button>
-        </div>
-      </section>
-
-      <section className="daily-card">
-        <strong>내일 Mini / Plus / Elite 계획</strong>
-        <label>
-          <span>Mini</span>
-          <input value={nextMini} onChange={(event) => setNextMini(event.target.value)} placeholder={data.miniTask} />
-        </label>
-        <label>
-          <span>Plus</span>
-          <input value={nextPlus} onChange={(event) => setNextPlus(event.target.value)} placeholder={data.plusTask} />
-        </label>
-        <label>
-          <span>Elite</span>
-          <input value={nextElite} onChange={(event) => setNextElite(event.target.value)} placeholder={data.eliteTask} />
-        </label>
-        <button className="primary-button" onClick={onSavePlan} type="button">
-          내일 계획 확인
+    <div className="daily-chat-checkin">
+      <div className="checkin-buttons daily-quick-replies" aria-label="오늘 상태 선택">
+        <button className={selectedCheckIn === "mini" ? "selected mini" : "mini"} disabled={pending} onClick={() => onCheckIn("mini")} type="button">
+          Mini
         </button>
-      </section>
+        <button className={selectedCheckIn === "plus" ? "selected plus" : "plus"} disabled={pending} onClick={() => onCheckIn("plus")} type="button">
+          Plus
+        </button>
+        <button className={selectedCheckIn === "elite" ? "selected elite" : "elite"} disabled={pending} onClick={() => onCheckIn("elite")} type="button">
+          Elite
+        </button>
+        <button
+          className={selectedCheckIn === "not_done" ? "selected not-done" : "not-done"}
+          disabled={pending}
+          onClick={() => onCheckIn("not_done")}
+          type="button"
+        >
+          기록만함
+        </button>
+      </div>
+
+      <form className="chat-composer daily-chat-composer" onSubmit={handlePatternSubmit}>
+        <textarea
+          disabled={pending}
+          value={patternInput}
+          onKeyDown={handleKeyDown}
+          onChange={(event) => setPatternInput(event.target.value)}
+          placeholder={
+            selectedCheckIn
+              ? "예: 퇴근하고 바로 누우니까 다시 시작하기가 어려웠어요."
+              : "먼저 Mini, Plus, Elite, 기록만함 중 하나를 골라주세요."
+          }
+          rows={1}
+        />
+        <button
+          aria-label="오늘 습관 기록 보내기"
+          disabled={pending || !selectedCheckIn || !patternInput.trim()}
+          type="submit"
+        >
+          <ArrowUp size={18} aria-hidden="true" />
+        </button>
+      </form>
     </div>
   );
 }
@@ -1359,12 +1307,12 @@ function createPatternCoachReply(status: CheckInStatus | null, text: string, tur
     return "좋아요. 이제 오늘 기록을 Mini, Plus, Elite, 기록만함 중 어디에 둘지도 같이 선택해두면 패턴이 더 선명해져요.";
   }
   if (hasFriction) {
-    return `오늘은 ${statusLabel}로 남기되, 핵심은 실패 판정이 아니라 막힌 조건을 잡은 거예요. 방금 적은 지점이 내일 Mini를 더 치밀하게 만드는 단서가 됩니다.`;
+    return `오늘은 ${statusLabel}로 저장했어요. 핵심은 실패 판정이 아니라 막힌 조건을 잡은 거예요. 방금 적은 지점이 내일 Mini를 더 치밀하게 만드는 단서가 됩니다.`;
   }
   if (hasSupport) {
-    return `좋아요. 오늘 ${statusLabel}까지 이어진 조건이 보였어요. 이 조건을 내일도 재현할 수 있게 기록에 남겨둘게요.`;
+    return `좋아요. 오늘 ${statusLabel}까지 이어진 조건이 보였어요. 이 조건을 내일도 재현할 수 있게 기록해둘게요.`;
   }
-  return `좋아요. 오늘 ${statusLabel}의 흐름으로 기록할 수 있겠어요. 한 문장이라도 남긴 것 자체가 다음 설계를 위한 데이터예요.`;
+  return `좋아요. 오늘은 ${statusLabel}의 흐름으로 저장했어요. 한 문장이라도 남긴 것 자체가 내일 설계를 위한 데이터예요.`;
 }
 
 function mapProfileToData(profile: ElasticProfile): OnboardingData {

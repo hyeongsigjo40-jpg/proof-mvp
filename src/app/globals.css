@@ -1313,6 +1313,20 @@ blockquote {
   padding: 2px;
 }
 
+.daily-chat-checkin {
+  display: grid;
+  gap: 8px;
+}
+
+.daily-chat-composer textarea {
+  min-height: 42px;
+}
+
+.daily-chat-composer button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
 .daily-card {
   background: rgba(255, 255, 255, 0.72);
   border: 1px solid var(--line);
@@ -1381,6 +1395,13 @@ blockquote {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
+.daily-quick-replies {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding-inline: 4px;
+}
+
 .checkin-buttons button {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -1388,6 +1409,16 @@ blockquote {
   font-size: 13px;
   font-weight: 850;
   min-height: 44px;
+}
+
+.daily-quick-replies button {
+  min-height: 36px;
+  padding: 8px 12px;
+}
+
+.checkin-buttons button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .checkin-buttons .mini {
