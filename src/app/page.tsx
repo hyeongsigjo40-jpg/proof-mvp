@@ -54,6 +54,7 @@ type DailyPatternTurn = {
   assistant: string;
 };
 
+type BlockerReason = "time" | "fatigue" | "emotion" | "prep" | "environment" | "too_big" | "other";
 type DailyStage = "checkin" | "tomorrow_confirm" | "pattern_chat" | "goal_edit" | "goal_patch_confirm" | "done";
 type HabitTaskPatch = Partial<Record<`${ElasticLevel}Task`, string>>;
 
@@ -141,7 +142,7 @@ const ONBOARDING_INTRO =
 const GOAL_AREA_QUESTION =
   "요즘 가장 바꾸고 싶은 삶의 영역은 무엇인가요?\n공부, 운동, 수면, 일, 감정관리, 인간관계 중 어디에 가까운지 자유롭게 말해주세요.";
 const HABIT_ACTION_OPENING =
-  "이제 목표를 실제 행동으로 바꿔볼게요.\n여기서 정하는 습관은 좋은 다짐이 아니라, 오늘이나 내일부터 바로 할 수 있고, 내가 통제할 수 있고, 완료 여부를 확인할 수 있는 행동이어야 해요.\n그래야 나중에 막혔을 때 나를 탓하는 대신, 행동의 크기나 조건을 조정할 수 있습니다.\n\n어떤 행동으로 시작해볼까요?";
+  "이제 목표를 실제 실행 계획으로 바꿔볼게요.\n한 문장으로 편하게 말해주세요. 기간, 빈도, 언제, 행동, 양이 들어가면 좋아요.\n\n예: 4주 동안 주 3회, 퇴근 후 헬스장에서 웨이트 3종목을 60분 하기\n아직 정하지 못한 건 비워도 괜찮아요. 제가 부족한 부분만 이어서 물어볼게요.";
 const DAILY_CHECKIN_PROMPT =
   "오늘의 습관은 어떤 흐름이었나요?\n이 체크인은 평가가 아니라 관찰이에요. 잘 됐다면 어떤 조건이 도와줬는지, 안 됐다면 어디서 막혔는지를 남겨볼게요. 기록 자체가 내일의 설계를 더 똑똑하게 만드는 데이터가 됩니다.";
 
@@ -162,8 +163,24 @@ const elasticLevelLabels: Record<ElasticLevel, string> = {
   elite: "Elite",
 };
 
-const MINI_OPENING = (habitAction: string) =>
-  `좋아요. 이제 "${habitAction}"을 Mini / Plus / Elite로 나눌게요.\n목표는 매번 완벽하게 해내는 게 아니라, 컨디션이 낮은 날에도 완전히 실패한 날이 되지 않게 만드는 거예요.\n\nMini는 전체 목표를 그대로 하는 게 아니라, 가장 힘든 날에도 남길 수 있는 최소 증거입니다. 예를 들어 목표가 책 30쪽 읽기라면 Mini는 30쪽이 아니라 책 펼치기, 1쪽 읽기, 3문장 읽기처럼 훨씬 작아야 해요.\n\n너무 쉬워 보여도 괜찮습니다. 이 기준이 있어야 실패한 날에도 기록이 남고, 다음 날 다시 이어갈 수 있어요. "${habitAction}"을 기준으로 Mini는 어디까지 낮추면 좋을까요?`;
+const blockerReasons: { value: BlockerReason; label: string }[] = [
+  { value: "time", label: "시간 부족" },
+  { value: "fatigue", label: "피곤함" },
+  { value: "emotion", label: "감정" },
+  { value: "prep", label: "준비 부족" },
+  { value: "environment", label: "환경 문제" },
+  { value: "too_big", label: "목표가 큼" },
+  { value: "other", label: "기타" },
+];
+
+const blockerReasonLabel = Object.fromEntries(
+  blockerReasons.map((reason) => [reason.value, reason.label]),
+) as Record<BlockerReason, string>;
+
+const MINI_OPENING = (habitAction: string) => [
+  "이제 목표를 Mini / Plus / Elite로 나눠볼게요.\n이건 잘함/못함을 평가하는 등급이 아니라, 그날의 컨디션에 맞춰 선택할 수 있는 실행 기준이에요.\nMini는 아주 힘든 날에도 남길 최소 증거, Plus는 보통 날의 기본 목표, Elite는 여유 있는 날의 확장 목표예요.",
+  `예를 들어 매일 책 읽는 습관이라면 Mini는 책 1쪽 읽기, Plus는 책 10쪽 읽기, Elite는 책 30쪽 읽기처럼 잡을 수 있어요.\n이제 "${habitAction}"도 이렇게 나눠볼게요. 먼저 Mini는 어느 정도면 좋을까요?`,
+];
 
 const initialMessages: Message[] = [];
 const DEBUG_SESSION_KEY = "proof-elastic-debug-session";
@@ -207,6 +224,7 @@ export default function Home() {
   const [messages, setMessages] = useState<Message[]>(initialMessages);
   const [input, setInput] = useState("");
   const [selectedCheckIn, setSelectedCheckIn] = useState<CheckInStatus | null>(null);
+  const [blockerReason, setBlockerReason] = useState<BlockerReason | null>(null);
   const [memo, setMemo] = useState("");
   const [patternInput, setPatternInput] = useState("");
   const [dailyPatternTurns, setDailyPatternTurns] = useState<DailyPatternTurn[]>([]);
@@ -254,9 +272,11 @@ export default function Home() {
       setRecords(createMonthRecords(checkIns, activeCheckInDate));
       const today = checkIns.find((checkIn) => checkIn.checkin_date === activeCheckInDate);
       if (today) {
+        const parsedMemo = parsePatternMemo(today.memo);
         setSelectedCheckIn(today.result);
+        setBlockerReason(parsedMemo.blockerReason);
         setMemo(today.memo ?? "");
-        setDailyPatternTurns(parsePatternMemo(today.memo).turns);
+        setDailyPatternTurns(parsedMemo.turns);
         setDailyStage("done");
         setMessages([
           ...buildDailyConversationMessages(checkIns, activeCheckInDate),
@@ -267,6 +287,7 @@ export default function Home() {
         ]);
       } else if (profile?.onboarding_completed_at) {
         setSelectedCheckIn(null);
+        setBlockerReason(null);
         setMemo("");
         setDailyPatternTurns([]);
         setPatternInput("");
@@ -358,7 +379,7 @@ export default function Home() {
     }
     if (step === "goal_complete") {
       setStep("mini");
-      assistant(MINI_OPENING(data.habitAction || "이 습관"));
+      showMiniOpening(data.habitAction || "이 습관");
     }
   }
 
@@ -400,19 +421,28 @@ export default function Home() {
 
   function handleCheckIn(status: Exclude<CheckInStatus, "open" | "no_response">) {
     setSelectedCheckIn(status);
+    setBlockerReason(null);
   }
 
-  async function saveDailyCheckIn(status: Exclude<CheckInStatus, "open" | "no_response">, text: string) {
+  async function saveDailyCheckIn(
+    status: Exclude<CheckInStatus, "open" | "no_response">,
+    text: string,
+    reason: BlockerReason | null,
+  ) {
     const trimmed = text.trim();
     if (!userId || !trimmed) return;
+    const blockerLabel = reason ? blockerReasonLabel[reason] : "";
+    const userMessage = [statusMeta[status].label, blockerLabel ? `막힌 이유: ${blockerLabel}` : "", trimmed]
+      .filter(Boolean)
+      .join("\n");
 
-    setMessages((current) => [...current, { role: "user", text: `${statusMeta[status].label}\n${trimmed}` }]);
+    setMessages((current) => [...current, { role: "user", text: userMessage }]);
     setPatternInput("");
     setPending(true);
     try {
-      const coachReply = createPatternCoachReply(status, trimmed, 0);
+      const coachReply = createPatternCoachReply(status, trimmed, 0, reason);
       const patternTurns = [{ user: trimmed, assistant: coachReply }];
-      const patternMemo = createPatternMemo(status, patternTurns);
+      const patternMemo = createPatternMemo(status, patternTurns, reason);
       const hasSelfNarrative = selfNarrativeKeywords.some((keyword) => patternMemo.includes(keyword));
       const saved = await saveElasticCheckIn({
         user_id: userId,
@@ -488,7 +518,7 @@ export default function Home() {
     try {
       const followupReply = createPatternFollowupReply(trimmed);
       const nextTurns = [...dailyPatternTurns, { user: trimmed, assistant: followupReply }];
-      const patternMemo = createPatternMemo(selectedCheckIn, nextTurns);
+      const patternMemo = createPatternMemo(selectedCheckIn, nextTurns, blockerReason);
       const saved = await saveElasticCheckIn({
         user_id: userId,
         scope: storageScope,
@@ -600,6 +630,7 @@ export default function Home() {
       { role: "assistant", text: DAILY_CHECKIN_PROMPT },
     ]);
     setSelectedCheckIn(null);
+    setBlockerReason(null);
     setPendingTaskPatch(null);
     setPatternInput("");
     setDailyStage("checkin");
@@ -675,6 +706,7 @@ export default function Home() {
     setMessages([]);
     setInput("");
     setSelectedCheckIn(null);
+    setBlockerReason(null);
     setMemo("");
     setPatternInput("");
     setDailyPatternTurns([]);
@@ -712,7 +744,7 @@ export default function Home() {
     setData(skipped);
     setGoalData({ lifeArea: "[스킵]", whyChange: "[스킵]", identityStatement: "[스킵]" });
     setStep("mini");
-    assistant(MINI_OPENING("이 습관"));
+    showMiniOpening("이 습관");
   }
 
   async function jumpToDailyCheckIn() {
@@ -742,6 +774,7 @@ export default function Home() {
     setNextPlus(seeded.plusTask);
     setNextElite(seeded.eliteTask);
     setSelectedCheckIn(null);
+    setBlockerReason(null);
     setMemo("");
     setPatternInput("");
     setDailyPatternTurns([]);
@@ -786,10 +819,18 @@ export default function Home() {
       ),
     );
     setSelectedCheckIn(checkIn.result);
+    setBlockerReason(parsePatternMemo(checkIn.memo).blockerReason);
   }
 
   function assistant(text: string) {
     setMessages((current) => [...current, { role: "assistant", text }]);
+  }
+
+  function showMiniOpening(habitAction: string) {
+    setMessages((current) => [
+      ...current,
+      ...MINI_OPENING(habitAction).map((text) => ({ role: "assistant" as const, text })),
+    ]);
   }
 
   function showOnboardingOpening() {
@@ -988,10 +1029,12 @@ export default function Home() {
               />
             ) : (
               <DailyCheckIn
+                blockerReason={blockerReason}
                 pending={pending}
                 stage={dailyStage}
                 patternInput={patternInput}
                 selectedCheckIn={selectedCheckIn}
+                setBlockerReason={setBlockerReason}
                 setPatternInput={setPatternInput}
                 onCheckIn={handleCheckIn}
                 onConfirmHabitGoalPatch={confirmHabitGoalPatch}
@@ -1339,10 +1382,12 @@ function OnboardingComposer({
 }
 
 function DailyCheckIn({
+  blockerReason,
   pending,
   patternInput,
   selectedCheckIn,
   stage,
+  setBlockerReason,
   setPatternInput,
   onCheckIn,
   onConfirmHabitGoalPatch,
@@ -1356,10 +1401,12 @@ function DailyCheckIn({
   onRequestPatternChat,
   onRetryHabitGoalEdit,
 }: {
+  blockerReason: BlockerReason | null;
   pending: boolean;
   patternInput: string;
   selectedCheckIn: CheckInStatus | null;
   stage: DailyStage;
+  setBlockerReason: (value: BlockerReason | null) => void;
   setPatternInput: (value: string) => void;
   onCheckIn: (status: Exclude<CheckInStatus, "open" | "no_response">) => void;
   onConfirmHabitGoalPatch: () => void;
@@ -1367,7 +1414,11 @@ function DailyCheckIn({
   onKeepHabitGoalUnchanged: () => void;
   onKeepTomorrowPlan: () => void;
   onRequestHabitGoalEdit: () => void;
-  onSaveCheckIn: (status: Exclude<CheckInStatus, "open" | "no_response">, text: string) => void;
+  onSaveCheckIn: (
+    status: Exclude<CheckInStatus, "open" | "no_response">,
+    text: string,
+    reason: BlockerReason | null,
+  ) => void;
   onSaveHabitGoalEditDraft: (text: string) => void;
   onSavePatternFollowup: (text: string) => void;
   onRequestPatternChat: () => void;
@@ -1375,6 +1426,7 @@ function DailyCheckIn({
 }) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const composerVisible = stage === "checkin" || stage === "pattern_chat" || stage === "goal_edit";
+  const needsBlockerReason = stage === "checkin" && (selectedCheckIn === "mini" || selectedCheckIn === "not_done");
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -1400,7 +1452,8 @@ function DailyCheckIn({
       return;
     }
     if (!selectedCheckIn || selectedCheckIn === "open" || selectedCheckIn === "no_response") return;
-    onSaveCheckIn(selectedCheckIn, patternInput);
+    if (needsBlockerReason && !blockerReason) return;
+    onSaveCheckIn(selectedCheckIn, patternInput, blockerReason);
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -1431,6 +1484,25 @@ function DailyCheckIn({
           >
             기록만함
           </button>
+        </div>
+      ) : null}
+
+      {needsBlockerReason ? (
+        <div className="blocker-reason-group" aria-label="막힌 이유 선택">
+          <span>오늘 막힌 이유</span>
+          <div className="blocker-reason-options">
+            {blockerReasons.map((reason) => (
+              <button
+                className={blockerReason === reason.value ? "selected" : ""}
+                disabled={pending}
+                key={reason.value}
+                onClick={() => setBlockerReason(reason.value)}
+                type="button"
+              >
+                {reason.label}
+              </button>
+            ))}
+          </div>
         </div>
       ) : null}
 
@@ -1472,14 +1544,20 @@ function DailyCheckIn({
                 : stage === "goal_edit"
                   ? "예: Plus는 10분 기록하기로 바꾸고, Mini는 1분 시작하기로 낮출래요."
                   : selectedCheckIn
-                    ? "예: 퇴근하고 바로 누우니까 다시 시작하기가 어려웠어요."
+                    ? needsBlockerReason
+                      ? "예: 퇴근하고 바로 누우니까 다시 시작하기가 어려웠어요."
+                      : "예: 저녁 식사 전에 시작하니까 훨씬 쉬웠어요."
                     : "먼저 Mini, Plus, Elite, 기록만함 중 하나를 골라주세요."
             }
             rows={1}
           />
           <button
             aria-label={stage === "pattern_chat" ? "패턴 이야기 보내기" : stage === "goal_edit" ? "습관 목표 수정 보내기" : "오늘 습관 기록 보내기"}
-            disabled={pending || (stage === "checkin" && !selectedCheckIn) || !patternInput.trim()}
+            disabled={
+              pending ||
+              (stage === "checkin" && (!selectedCheckIn || (needsBlockerReason && !blockerReason))) ||
+              !patternInput.trim()
+            }
             type="submit"
           >
             <ArrowUp size={18} aria-hidden="true" />
@@ -1699,9 +1777,10 @@ function buildSmartSentence(data: OnboardingData): string {
   if (habitPeriod) parts.push(`${habitPeriod} 동안`);
   if (habitFrequency) parts.push(habitFrequency);
   if (habitWhen) parts.push(`${habitWhen}에`);
-  parts.push(habitAction + "을");
-  if (habitAmount) parts.push(`${habitAmount} 한다`);
-  else parts.push("한다");
+  const action = habitAmount && habitAction.endsWith("하기")
+    ? habitAction.replace(/하기$/, `${habitAmount} 하기`)
+    : [habitAction, habitAmount].filter(Boolean).join(" ");
+  parts.push(action);
   return `나는 ${parts.join(", ")}.`;
 }
 
@@ -1716,10 +1795,11 @@ function createDailyNote(status: CheckInStatus, memo: string) {
   return firstLine ? `${statusText}: ${firstLine}` : statusText;
 }
 
-function createPatternMemo(status: CheckInStatus, turns: DailyPatternTurn[]) {
+function createPatternMemo(status: CheckInStatus, turns: DailyPatternTurn[], blockerReason: BlockerReason | null = null) {
   const statusText = statusMeta[status]?.label ?? status;
   return [
     `[오늘의 선택] ${statusText}`,
+    ...(blockerReason ? [`[막힌 이유] ${blockerReasonLabel[blockerReason]}`] : []),
     ...turns.flatMap((turn, index) => [
       `[패턴 ${index + 1}] ${turn.user}`,
       `[코치 응답 ${index + 1}] ${turn.assistant}`,
@@ -1727,11 +1807,19 @@ function createPatternMemo(status: CheckInStatus, turns: DailyPatternTurn[]) {
   ].join("\n");
 }
 
-function parsePatternMemo(memo: string | null | undefined): { turns: DailyPatternTurn[] } {
-  if (!memo) return { turns: [] };
+function parsePatternMemo(memo: string | null | undefined): { turns: DailyPatternTurn[]; blockerReason: BlockerReason | null } {
+  if (!memo) return { turns: [], blockerReason: null };
 
   const turns: DailyPatternTurn[] = [];
+  let blockerReason: BlockerReason | null = null;
   for (const line of memo.split("\n")) {
+    const blockerMatch = line.match(/^\[막힌 이유\]\s*(.*)$/);
+    if (blockerMatch) {
+      const label = blockerMatch[1]?.trim() ?? "";
+      blockerReason = blockerReasons.find((reason) => reason.label === label)?.value ?? null;
+      continue;
+    }
+
     const patternMatch = line.match(/^\[패턴 \d+\]\s*(.*)$/);
     if (patternMatch) {
       turns.push({ user: patternMatch[1]?.trim() ?? "", assistant: "" });
@@ -1745,7 +1833,7 @@ function parsePatternMemo(memo: string | null | undefined): { turns: DailyPatter
     }
   }
 
-  return { turns };
+  return { turns, blockerReason };
 }
 
 function buildDailyConversationMessages(checkIns: ElasticCheckIn[], activeDate: string): Message[] {
@@ -1784,8 +1872,14 @@ function formatDateLabel(dateKey: string) {
   return `${Number(month)}월 ${Number(day)}일`;
 }
 
-function createPatternCoachReply(status: CheckInStatus | null, text: string, turnIndex: number) {
+function createPatternCoachReply(
+  status: CheckInStatus | null,
+  text: string,
+  turnIndex: number,
+  blockerReason: BlockerReason | null = null,
+) {
   const statusLabel = status ? statusMeta[status].label : "아직 선택 전";
+  const blockerLabel = blockerReason ? blockerReasonLabel[blockerReason] : "";
   const hasFriction = ["못", "막", "피곤", "늦", "누웠", "미뤘", "바빠", "까먹", "귀찮", "힘들"].some((keyword) =>
     text.includes(keyword),
   );
@@ -1793,6 +1887,9 @@ function createPatternCoachReply(status: CheckInStatus | null, text: string, tur
 
   if (turnIndex === 0 && !status) {
     return "좋아요. 이제 오늘 기록을 Mini, Plus, Elite, 기록만함 중 어디에 둘지도 같이 선택해두면 패턴이 더 선명해져요.";
+  }
+  if (blockerLabel) {
+    return `오늘은 ${statusLabel}로 저장했어요. 막힌 이유는 "${blockerLabel}"로 남겨둘게요. 이건 실패 판정이 아니라 내일 계획을 조정하기 위한 데이터예요.`;
   }
   if (hasFriction) {
     return `오늘은 ${statusLabel}로 저장했어요. 핵심은 실패 판정이 아니라 막힌 조건을 잡은 거예요. 방금 적은 지점이 내일 Mini를 더 치밀하게 만드는 단서가 됩니다.`;
@@ -1994,11 +2091,11 @@ function GoalPanel({ data, goalData, step }: { data: OnboardingData; goalData: G
   ];
 
   const habitFields: { label: string; value: string; active: boolean; placeholder: string }[] = [
-    { label: "어떤 행동", value: data.habitAction, active: step === "habit_action", placeholder: "예: 토익 LC 공부" },
-    { label: "기간", value: data.habitPeriod, active: step === "habit_period", placeholder: "예: 4주" },
-    { label: "빈도", value: data.habitFrequency, active: step === "habit_frequency", placeholder: "예: 주 5회" },
-    { label: "언제", value: data.habitWhen, active: step === "habit_when", placeholder: "예: 저녁 식사 후" },
-    { label: "얼마나", value: data.habitAmount, active: step === "habit_amount", placeholder: "예: 10분" },
+    { label: "어떤 행동", value: data.habitAction, active: step === "habit_action", placeholder: "예: 헬스장에서 웨이트" },
+    { label: "기간", value: data.habitPeriod, active: step === "habit_action" || step === "habit_period", placeholder: "예: 4주" },
+    { label: "빈도", value: data.habitFrequency, active: step === "habit_action" || step === "habit_frequency", placeholder: "예: 주 3회" },
+    { label: "언제", value: data.habitWhen, active: step === "habit_action" || step === "habit_when", placeholder: "예: 퇴근 후" },
+    { label: "얼마나", value: data.habitAmount, active: step === "habit_action" || step === "habit_amount", placeholder: "예: 60분" },
   ];
 
   const patternFields: { label: string; value: string; active: boolean }[] = [

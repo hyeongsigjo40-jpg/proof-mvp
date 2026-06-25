@@ -68,6 +68,16 @@ type HabitActionReviewResult = {
   reason: string;
 };
 
+type HabitPlanParserResult = {
+  habitAction: string | null;
+  habitPeriod: string | null;
+  habitFrequency: string | null;
+  habitWhen: string | null;
+  habitAmount: string | null;
+  confidence: number;
+  reason: string;
+};
+
 type ElasticLevelReviewResult = {
   decision: "save" | "revise_step" | "ask_clarifying_question";
   task: string | null;
@@ -131,7 +141,9 @@ export async function POST(request: Request) {
   const body = (await request.json()) as OnboardingControllerRequest;
 
   if (!openai) {
-    return NextResponse.json(fallbackCorrectionTurn(body) ?? fallbackTurn(body));
+    return NextResponse.json(
+      fallbackCorrectionTurn(body) ?? tryCreateDeterministicHabitPlanTurn(body) ?? fallbackTurn(body),
+    );
   }
 
   const correction = await routeCorrection(openai, body);
@@ -139,9 +151,8 @@ export async function POST(request: Request) {
     return NextResponse.json(correction);
   }
 
-  const deterministicHabitAction = tryCreateDeterministicHabitActionTurn(body);
-  if (deterministicHabitAction) {
-    return NextResponse.json(deterministicHabitAction);
+  if (body.current_step === "habit_action") {
+    return NextResponse.json(await createHabitPlanTurn(openai, body));
   }
 
   const response = await openai.responses.create({
@@ -154,18 +165,29 @@ export async function POST(request: Request) {
           "\n\n[step_flow]\n" +
           "[목표 파트: goal_area→goal_why→goal_identity]\n자연스러운 대화로 진행. goal_identity에서 '나는 [이전 패턴]이 아니라, [새 행동 정체성]인 사람이다.' 형태 문장을 goalIdentityStatement에 저장.\n\n" +
           "[패턴 파트: failure_situation→failure_feeling→bridge]\n- failure_situation: 최근에 목표를 향해 가다가 흐트러졌던 구체적인 상황을 파악한다. 판단 없이 failureSituation에 저장한다.\n- failure_feeling: 그때 든 생각이나 감정을 파악한다. failureFeeling에 저장 후 next_step=bridge.\n- bridge: 사용자의 실패 상황과 감정을 직접 언급하며, 이것이 의지력 문제가 아니라 목표가 상황에 맞게 유연하지 않아서임을 설명한다. 이어서 이제 목표를 '오늘이나 내일부터 바로 할 수 있고, 직접 통제할 수 있고, 완료 여부를 확인할 수 있는 행동'으로 바꿀 것이라고 안내한다. should_advance=true, next_step=bridge, data_patch=[].\n\n" +
-          "[습관 목표 파트: habit_action→habit_period→habit_frequency→habit_when→habit_amount]\nSMART 습관 문장을 한 필드씩 채워나간다.\n- habit_action: 구체적인 행동\n- habit_period: 며칠/몇 주\n- habit_frequency: 주 몇 회 또는 매일\n- habit_when: 언제/어떤 상황\n- habit_amount: 얼마나\n\n" +
+          "[습관 목표 파트]\n" +
+          "- current_step=habit_action은 사용자의 한 문장에서 habitAction, habitPeriod, habitFrequency, habitWhen, habitAmount를 최대한 함께 추출하는 통합 실행 계획 단계다.\n" +
+          "- 사용자가 이미 말한 기간/빈도/시점/양을 다시 묻지 않는다. data_patch에 함께 저장한다.\n" +
+          "- habitAction과 habitAmount가 있고 habitFrequency 또는 habitWhen 중 하나가 있으면 실행 계획은 충분하다. habitPeriod가 없으면 '4주'를 기본 실험 기간으로 저장하고 next_step=goal_complete로 진행한다.\n" +
+          "- 필수 정보가 부족하면 should_advance=false, next_step=habit_action으로 두고 부족한 정보 하나만 묻는다.\n" +
+          "- habit_period, habit_frequency, habit_when, habit_amount 단계는 기존 데이터/디버그 호환용이다. 일반 진행에서는 habit_action에서 한 번에 채우는 것을 우선한다.\n\n" +
           "[habit_action 품질 기준]\n" +
-          "- habit_action은 사용자가 오늘/내일 바로 실행할 수 있고, 직접 통제할 수 있고, 구체적이고, 측정 가능한 루틴 행동이어야 한다.\n" +
+          "- habit_action은 사용자가 오늘/내일 바로 실행할 수 있고, 직접 통제할 수 있고, 구체적이고, 측정 가능한 루틴 행동을 지향한다.\n" +
+          "- 단, 이 단계의 역할은 사용자를 막거나 목표를 대신 고치는 것이 아니라, 사용자의 표현을 최대한 보존해 저장하고 다음 필드에서 기간/빈도/시점/양을 채우도록 돕는 것이다.\n" +
           "- 측정 가능하다는 뜻: 완료 여부를 사용자가 yes/no로 판단할 수 있거나, 횟수/시간/분량/대상 수 같은 단위가 들어 있다.\n" +
           "- 구체적이라는 뜻: 무엇을 대상으로 어떤 행동을 하는지가 드러난다. 예: '연애 노력하기'가 아니라 '대화 소재 1개 적기'.\n" +
           "- 사용자가 행동과 측정 기준을 같이 말하면 저장 가능하다. 예: '헬스장에서 웨이트 3종목 하기', '헬스장에서 웨이트 3종목을 60분 동안 하기'는 habit_action으로 저장한다. 이를 '운동복 입기', '가방 챙기기'처럼 더 작은 준비 행동으로 바꾸지 않는다.\n" +
           "- 외부 사건이 있어야 가능한 행동은 저장하지 않는다. 예: '소개팅이나 매칭 직후 연락하기'는 사용자가 매일 만들 수 없는 조건이므로 부적합하다.\n" +
           "- 사용자가 '작지 않다', '추상적이다', '루틴적으로 할 수 있어야 한다', '추천해줘', '행동 말이야'라고 말하면 그것을 habitAction 값으로 저장하지 않는다.\n" +
-          "- 기준을 통과하지 못하면 should_advance=false, data_patch=[]로 두고, 부족한 차원 하나만 좁히는 질문 또는 현재 영역에 맞는 구체 후보 2-3개를 제안한다.\n" +
+          "- 기준을 완전히 통과하지 못해도 사용자가 행동 의도를 말했으면 먼저 저장 가능한 표현으로 받아들이고 다음 단계에서 부족한 기준을 채운다. 단순히 더 좋아질 수 있다는 이유로 막지 않는다.\n" +
+          "- 정말 저장할 행동이 없거나 메타 답변만 있으면 should_advance=false, data_patch=[]로 두고, 기준을 짧게 설명한 뒤 사용자가 직접 고를 수 있는 후보 2-3개를 제안한다.\n" +
           "- 연애 영역 예시: '매일 저녁 10분 연락 후보 1명 정리하기', '대화 소재 1개 적기', '소개팅 앱 프로필 한 줄 개선하기'.\n\n" +
           "[goal_complete] 버튼으로 처리, 직접 호출하지 않는다.\n\n" +
-          "[mini→plus→elite 수정 규칙]\n사용자가 이전 레벨을 수정하려 하면 해당 필드에 저장하고 next_step을 그 레벨로 되돌린다.",
+          "[Mini/Plus/Elite 진행 규칙]\n" +
+          "- Mini/Plus/Elite는 사용자가 직접 선택하도록 돕는다. AI가 더 적절하다고 판단해 사용자의 답을 거부하거나 다른 행동으로 바꾸지 않는다.\n" +
+          "- 사용자가 현재 레벨에 답하면 그 값을 해당 필드에 저장하고 다음 단계로 진행한다. 레벨 의미와 조금 달라도 막지 말고, 다음 reply에서 기준을 짧게 설명하며 필요하면 나중에 조정할 수 있다고 안내한다.\n" +
+          "- Mini는 가장 힘든 날에도 남길 수 있는 최소 증거, Plus는 보통 날의 기본 성공 단위, Elite는 여유 있는 날의 확장 단위라고 설명한다.\n" +
+          "- 사용자가 이전 레벨을 수정하려 하면 해당 필드에 저장하고 next_step을 그 레벨로 되돌린다.",
       },
       {
         role: "user",
@@ -388,7 +410,7 @@ function currentQuestion(step: OnboardingStep, data: OnboardingData) {
     case "failure_feeling":
       return "그때 어떤 생각이나 감정이 들었어요?";
     case "habit_action":
-      return "이제 목표를 실제 행동으로 바꿔볼게요. 오늘이나 내일부터 바로 할 수 있고, 내가 통제할 수 있고, 완료 여부를 확인할 수 있는 행동이어야 해요. 어떤 행동으로 시작해볼까요?";
+      return "이제 목표를 실제 실행 계획으로 바꿔볼게요. 기간, 빈도, 언제, 행동, 양을 한 문장으로 편하게 말해주세요. 아직 정하지 못한 건 비워도 괜찮아요.";
     case "habit_period":
       return "며칠 동안 실험해볼까요? 7일, 14일, 28일 중 선택해주세요.";
     case "habit_frequency":
@@ -428,7 +450,7 @@ function stepGoal(step: OnboardingStep): string {
     case "bridge":
       return "사용자의 failureSituation과 failureFeeling을 직접 언급하며 공감한다. 이것이 의지력 문제가 아니라 목표가 상황에 맞게 유연하지 않아서임을 설명한다. 이어서 Proof가 목표를 지금 당장 가능한, 측정 가능하고, 통제 가능한 습관 행동으로 전환한다고 안내한다. 마지막에 '이제 같이 만들어볼까요?'로 마무리. should_advance=true, next_step=bridge, data_patch=[].";
     case "habit_action":
-      return "구체적이고 사용자가 직접 통제할 수 있는 루틴 행동을 habitAction에 저장한다. 외부 사건이 있어야만 가능한 행동, 추상적인 방향, 메타 피드백, 추천 요청은 저장하지 않는다. 막연하면 2-3개의 구체 후보를 제안하고 should_advance=false.";
+      return "사용자의 한 문장에서 habitAction, habitPeriod, habitFrequency, habitWhen, habitAmount를 최대한 함께 추출한다. 이미 말한 정보는 다시 묻지 않는다. habitAction과 habitAmount가 있고 habitFrequency 또는 habitWhen 중 하나가 있으면 goal_complete로 진행한다. 부족하면 habit_action에 머물며 부족한 정보 하나만 묻는다.";
     case "habit_period":
       return "며칠/몇 주 동안 실험할지 habitPeriod에 저장. 7일/14일/28일 중 권장.";
     case "habit_frequency":
@@ -438,56 +460,255 @@ function stepGoal(step: OnboardingStep): string {
     case "habit_amount":
       return "얼마나 할지(시간, 양, 거리 등) habitAmount에 저장. 저장 후 next_step은 goal_complete.";
     case "mini":
-      return "현재 스텝=mini. Mini는 망한 날에도 가능한 최소 행동. 사용자 답변을 miniTask에 저장, next_step=plus.";
+      return "현재 스텝=mini. Mini는 가장 힘든 날에도 가능한 최소 증거다. 사용자 답변을 거부하거나 재설계하지 말고 miniTask에 저장한 뒤 Plus로 진행한다.";
     case "plus":
-      return "현재 스텝=plus. Plus는 보통 날의 기본 성공 단위. 사용자가 'mini를 바꾸고 싶다'고 하면 miniTask에 저장하고 next_step=mini로 되돌린다. 아니면 plusTask에 저장, next_step=elite.";
+      return "현재 스텝=plus. Plus는 보통 날의 기본 성공 단위다. 사용자가 'mini를 바꾸고 싶다'고 하면 miniTask에 저장하고 next_step=mini로 되돌린다. 아니면 plusTask에 저장하고 Elite로 진행한다.";
     case "elite":
-      return "현재 스텝=elite. Elite는 여유 있는 날의 도전 단위. 사용자가 'mini/plus를 바꾸고 싶다'고 하면 해당 필드에 저장하고 next_step을 mini 또는 plus로 되돌린다. 아니면 eliteTask에 저장, next_step=complete.";
+      return "현재 스텝=elite. Elite는 여유 있는 날의 확장 단위다. 사용자가 'mini/plus를 바꾸고 싶다'고 하면 해당 필드에 저장하고 next_step을 mini 또는 plus로 되돌린다. 아니면 eliteTask에 저장하고 완료로 진행한다.";
     default:
       return "온보딩 완료.";
   }
 }
 
-function tryCreateDeterministicHabitActionTurn(body: OnboardingControllerRequest): OnboardingControllerResponse | null {
+async function createHabitPlanTurn(
+  client: OpenAI,
+  body: OnboardingControllerRequest,
+): Promise<OnboardingControllerResponse> {
+  const parsed = await parseHabitPlanWithGPT(client, body);
+  const parsedData: OnboardingData = {
+    habitAction: parsed.habitAction ?? "",
+    habitPeriod: parsed.habitPeriod ?? "",
+    habitFrequency: parsed.habitFrequency ?? "",
+    habitWhen: parsed.habitWhen ?? "",
+    habitAmount: parsed.habitAmount ?? "",
+  };
+  const merged: OnboardingData = {
+    ...body.data,
+    ...Object.fromEntries(Object.entries(parsedData).filter(([, value]) => Boolean(value))),
+  };
+  const dataPatch = createHabitPlanPatch(body.data, merged);
+
+  if (!merged.habitAction) {
+    return stay(
+      "habit_action",
+      dataPatch,
+      "좋아요. 실행 계획으로 만들려면 먼저 어떤 행동을 할지 필요해요. 예: 헬스장에서 웨이트 3종목 하기, 밤 11시에 책 10쪽 읽기처럼 말해주세요.",
+    );
+  }
+
+  if (!merged.habitAmount) {
+    return stay(
+      "habit_action",
+      dataPatch,
+      `좋아요. "${merged.habitAction}"로 잡아둘게요. 한 번에 얼마나 할까요? 예: 20분, 3종목, 10쪽처럼 완료 기준을 말해주세요.`,
+    );
+  }
+
+  if (!merged.habitFrequency && !merged.habitWhen) {
+    return stay(
+      "habit_action",
+      dataPatch,
+      `좋아요. "${merged.habitAction}" ${merged.habitAmount} 기준으로 잡아둘게요. 얼마나 자주 하거나 언제 할까요? 예: 주 3회, 매일 밤 11시, 퇴근 후처럼 말해주세요.`,
+    );
+  }
+
+  if (!merged.habitPeriod) merged.habitPeriod = "4주";
+
+  return {
+    intent: "answer",
+    should_advance: true,
+    next_step: "goal_complete",
+    data_patch: toPatchArray(createHabitPlanPatch(body.data, merged)),
+    reply: `좋아요. 이렇게 실행 계획을 잡아볼게요.\n\n${formatHabitPlanSummary(merged)}\n\n이제 이 행동을 Mini / Plus / Elite로 나눠서, 컨디션이 낮은 날에도 완전히 실패한 날이 되지 않게 만들 거예요.`,
+  };
+}
+
+async function parseHabitPlanWithGPT(
+  client: OpenAI,
+  body: OnboardingControllerRequest,
+): Promise<HabitPlanParserResult> {
+  const response = await client.responses.create({
+    model,
+    input: [
+      {
+        role: "system",
+        content:
+          buildProofSystemPrompt(
+            "실행 계획 파서",
+            "현재 호출은 habit_plan_parser다. 사용자의 자연어 답변에서 실행 계획 필드를 구조화한다.",
+          ) +
+          "\n\n[parse_rules]\n" +
+          "- habitAction에는 사용자가 실제로 할 행동만 넣는다. 기간, 빈도, 실행 시점, 실행량은 habitAction에서 제외한다.\n" +
+          "- habitPeriod는 실험 기간이다. 예: 2주, 4주, 14일.\n" +
+          "- habitFrequency는 반복 빈도다. 예: 매일, 주 3회, 일주일에 5번.\n" +
+          "- habitWhen은 실행 시점이나 상황이다. 예: 퇴근 후, 밤 11시, 저녁 식사 후.\n" +
+          "- habitAmount는 한 번의 완료 기준이다. 예: 60분, 10쪽, 20문제, 3종목.\n" +
+          "- 사용자가 말하지 않은 값은 null로 둔다. 절대 추측해서 채우지 않는다.\n" +
+          "- 기존 프로필에 이미 값이 있고 사용자가 새로 말하지 않았으면 null로 둔다. 기존 값 병합은 코드가 한다.\n" +
+          "- 사용자가 '그렇게 해줘', '그걸로 할게'처럼 위임하면 existing_profile의 기존 값과 latest_user_answer 맥락에서 확정 가능한 값만 반환한다.\n" +
+          "- 장소가 행동의 의미를 구체화하면 habitAction에 포함한다. 예: '헬스장을 주 3회 가서 운동하려고' → habitAction='헬스장에 가서 운동하기', habitFrequency='주 3회'.\n" +
+          "- 행동은 자연스럽고 짧게 정리한다. 예: '2주 동안 매일 밤 11시에 책 10쪽 읽기' → habitAction='책 읽기', habitAmount='10쪽'.\n" +
+          "- 예: '4주 동안 주 3회, 퇴근 후 헬스장에서 웨이트 3종목을 60분 하기' → habitAction='헬스장에서 웨이트 3종목 하기', habitPeriod='4주', habitFrequency='주 3회', habitWhen='퇴근 후', habitAmount='60분'.\n" +
+          "- 예: '4주 동안 주 5회 저녁에 토익 LC 20문제 풀기' → habitAction='토익 LC 문제 풀기', habitPeriod='4주', habitFrequency='주 5회', habitWhen='저녁', habitAmount='20문제'.",
+      },
+      {
+        role: "user",
+        content: JSON.stringify({
+          latest_user_answer: body.latest_user_answer ?? "",
+          existing_profile: {
+            habitAction: body.data.habitAction,
+            habitPeriod: body.data.habitPeriod,
+            habitFrequency: body.data.habitFrequency,
+            habitWhen: body.data.habitWhen,
+            habitAmount: body.data.habitAmount,
+          },
+        }),
+      },
+    ],
+    text: {
+      format: {
+        type: "json_schema",
+        name: "habit_plan_parser",
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "habitAction",
+            "habitPeriod",
+            "habitFrequency",
+            "habitWhen",
+            "habitAmount",
+            "confidence",
+            "reason",
+          ],
+          properties: {
+            habitAction: { type: ["string", "null"] },
+            habitPeriod: { type: ["string", "null"] },
+            habitFrequency: { type: ["string", "null"] },
+            habitWhen: { type: ["string", "null"] },
+            habitAmount: { type: ["string", "null"] },
+            confidence: { type: "number", minimum: 0, maximum: 1 },
+            reason: { type: "string" },
+          },
+        },
+      },
+    },
+  });
+
+  return JSON.parse(response.output_text) as HabitPlanParserResult;
+}
+
+function tryCreateDeterministicHabitPlanTurn(body: OnboardingControllerRequest): OnboardingControllerResponse | null {
   if (body.current_step !== "habit_action") return null;
 
   const text = body.latest_user_answer?.trim() ?? "";
   if (!text) return null;
-  if (isMetaHabitActionReply(text)) return null;
 
-  const measurableUnits = text.match(/\d+\s*(?:분|시간|회|세트|종목|km|킬로|쪽|문제|개|장|줄)/g) ?? [];
-  if (measurableUnits.length === 0) return null;
+  const parsed = parseHabitPlanText(text);
+  const merged: OnboardingData = {
+    ...body.data,
+    ...Object.fromEntries(Object.entries(parsed).filter(([, value]) => Boolean(value))),
+  };
+  if (!merged.habitAction && isMetaHabitActionReply(text)) return null;
 
-  const hasConcreteAction =
-    /(헬스장|웨이트|러닝머신|스트레칭|스쿼트|운동|공부|독서|읽|쓰|정리|기록|걷|뛰|달리|명상|연습|복습|문제)/.test(text);
-  const hasSpecificExercise = /(웨이트|러닝머신|스트레칭|스쿼트|벤치|데드|랫풀다운|레그|유산소|근력)/.test(text);
-  const isOnlyBroadExercise = /(운동)/.test(text) && !hasSpecificExercise && !/(스트레칭|걷|뛰|달리)/.test(text);
+  const dataPatch = createHabitPlanPatch(body.data, merged);
+  if (!merged.habitAction) {
+    return stay(
+      "habit_action",
+      dataPatch,
+      "좋아요. 실행 계획으로 만들려면 먼저 어떤 행동을 할지 필요해요. 예: 헬스장에서 웨이트 3종목 하기, 밤 11시에 책 10쪽 읽기처럼 말해주세요.",
+    );
+  }
 
-  if (!hasConcreteAction || isOnlyBroadExercise) return null;
+  if (!merged.habitAmount) {
+    return stay(
+      "habit_action",
+      dataPatch,
+      `좋아요. "${merged.habitAction}"로 잡아둘게요. 한 번에 얼마나 할까요? 예: 20분, 3종목, 10쪽처럼 완료 기준을 말해주세요.`,
+    );
+  }
 
-  const habitAction = normalizeDeterministicHabitAction(text);
-  const amount = extractHabitAmount(text);
-  const dataPatch: Partial<OnboardingData> = { habitAction };
-  if (amount) dataPatch.habitAmount = amount;
+  if (!merged.habitFrequency && !merged.habitWhen) {
+    return stay(
+      "habit_action",
+      dataPatch,
+      `좋아요. "${merged.habitAction}" ${merged.habitAmount} 기준으로 잡아둘게요. 얼마나 자주 하거나 언제 할까요? 예: 주 3회, 매일 밤 11시, 퇴근 후처럼 말해주세요.`,
+    );
+  }
 
-  const amountNote = amount ? ` ${amount} 기준도 함께 반영해둘게요.` : "";
-  return advance(
-    "habit_action",
-    dataPatch,
-    `좋아요. "${habitAction}"로 잡을게요.${amountNote}\n\n며칠 동안 실험해볼까요? 7일, 14일, 28일 중 선택해주세요.`,
-  );
+  if (!merged.habitPeriod) merged.habitPeriod = "4주";
+
+  return {
+    intent: "answer",
+    should_advance: true,
+    next_step: "goal_complete",
+    data_patch: toPatchArray(createHabitPlanPatch(body.data, merged)),
+    reply: `좋아요. 이렇게 실행 계획을 잡아볼게요.\n\n${formatHabitPlanSummary(merged)}\n\n이제 이 행동을 Mini / Plus / Elite로 나눠서, 컨디션이 낮은 날에도 완전히 실패한 날이 되지 않게 만들 거예요.`,
+  };
 }
 
 function isMetaHabitActionReply(text: string) {
   return /(추천|해줘|그렇게|그걸로|모르겠|아무거나|예시|다시|너무|넓|구체)/.test(text);
 }
 
+function parseHabitPlanText(text: string): Partial<OnboardingData> {
+  return {
+    habitAction: extractHabitAction(text),
+    habitPeriod: extractHabitPeriod(text),
+    habitFrequency: extractHabitFrequency(text),
+    habitWhen: extractHabitWhen(text),
+    habitAmount: extractHabitAmount(text),
+  };
+}
+
+function createHabitPlanPatch(previous: OnboardingData, next: OnboardingData): Partial<OnboardingData> {
+  const patch: Partial<OnboardingData> = {};
+  const fields: (keyof OnboardingData)[] = [
+    "habitAction",
+    "habitPeriod",
+    "habitFrequency",
+    "habitWhen",
+    "habitAmount",
+  ];
+  for (const field of fields) {
+    const value = next[field]?.trim();
+    if (value && value !== previous[field]) patch[field] = value;
+  }
+  return patch;
+}
+
+function extractHabitAction(text: string) {
+  const normalized = normalizeDeterministicHabitAction(text);
+  if (!hasHabitActionSignal(normalized)) return "";
+  return normalized;
+}
+
+function hasHabitActionSignal(text: string) {
+  return /(헬스장|웨이트|러닝머신|스트레칭|스쿼트|운동|공부|독서|읽|쓰기|쓰|정리|기록|걷|뛰|달리|명상|연습|복습|문제|요가|필라테스)/.test(text);
+}
+
+function extractHabitPeriod(text: string) {
+  return text.match(/\d+\s*(?:일|주|개월|달)\s*(?:동안|간)?/)?.[0]?.replace(/\s+/g, " ").trim() ?? "";
+}
+
+function extractHabitFrequency(text: string) {
+  if (/매일|매일마다|매일\s*\d+/.test(text)) return "매일";
+  return text.match(/주\s*\d+\s*회|일주일에\s*\d+\s*(?:번|회)|하루에\s*\d+\s*(?:번|회)/)?.[0]?.replace(/\s+/g, " ").trim() ?? "";
+}
+
+function extractHabitWhen(text: string) {
+  const match = text.match(/(?:퇴근 후|출근 전|점심시간|아침|오전|오후|저녁|밤|자기 전|기상 후|식사 후)(?:\s*\d+\s*시)?/);
+  return match?.[0]?.replace(/\s+/g, " ").trim() ?? "";
+}
+
 function normalizeDeterministicHabitAction(text: string) {
   const weightTraining = normalizeWeightTrainingAction(text);
   if (weightTraining) return weightTraining;
+  if (/헬스장/.test(text) && /운동/.test(text)) return "헬스장에 가서 운동하기";
 
   return text
     .replace(/\s+/g, " ")
+    .replace(/^나는\s*/, "")
     .replace(/하려고$/, "하기")
     .replace(/할거야$/, "하기")
     .replace(/할 거야$/, "하기")
@@ -503,14 +724,46 @@ function normalizeWeightTrainingAction(text: string) {
 
   const location = /헬스장/.test(text) ? "헬스장에서 " : "";
   const count = text.match(/\d+\s*종목/)?.[0] ?? "";
-  const time = text.match(/\d+\s*(?:분|시간)/)?.[0] ?? "";
-  const details = [count, time].filter(Boolean).join(" ");
-  return `${location}웨이트${details ? ` ${details}` : ""} 하기`;
+  return `${location}웨이트${count ? ` ${count}` : ""} 하기`;
 }
 
 function extractHabitAmount(text: string) {
-  const amounts = text.match(/\d+\s*(?:분|시간|회|세트|종목|km|킬로|쪽|문제|개|장|줄)/g) ?? [];
+  if (/(웨이트|근력)/.test(text)) {
+    const time = text.match(/\d+\s*(?:분|시간)/)?.[0] ?? "";
+    const count = text.match(/\d+\s*종목/)?.[0] ?? "";
+    return time || count;
+  }
+
+  const amountSource = text
+    .replace(/주\s*\d+\s*회/g, "")
+    .replace(/일주일에\s*\d+\s*(?:번|회)/g, "")
+    .replace(/하루에\s*\d+\s*(?:번|회)/g, "")
+    .replace(/\d+\s*(?:일|주|개월|달)\s*(?:동안|간)?/g, "");
+  const amounts = amountSource.match(/\d+\s*(?:분|시간|회|세트|종목|km|킬로|쪽|문제|개|장|줄)/g) ?? [];
   return amounts.join(", ");
+}
+
+function formatHabitPlanSummary(data: OnboardingData) {
+  return [
+    `기간: ${data.habitPeriod || "4주"}`,
+    `빈도: ${data.habitFrequency || "정하지 않음"}`,
+    `언제: ${data.habitWhen || "정하지 않음"}`,
+    `행동: ${data.habitAction || "정하지 않음"}`,
+    `양: ${data.habitAmount || "정하지 않음"}`,
+  ].join("\n");
+}
+
+function getMissingHabitPlanReply(data: OnboardingData) {
+  if (!data.habitAction) {
+    return "실행 계획으로 만들려면 먼저 어떤 행동을 할지 필요해요. 예: 헬스장에서 웨이트 3종목 하기, 밤 11시에 책 10쪽 읽기처럼 말해주세요.";
+  }
+  if (!data.habitAmount) {
+    return `좋아요. "${data.habitAction}"로 잡아둘게요. 한 번에 얼마나 할까요? 예: 20분, 3종목, 10쪽처럼 완료 기준을 말해주세요.`;
+  }
+  if (!data.habitFrequency && !data.habitWhen) {
+    return `좋아요. "${data.habitAction}" ${data.habitAmount} 기준으로 잡아둘게요. 얼마나 자주 하거나 언제 할까요? 예: 주 3회, 매일 밤 11시, 퇴근 후처럼 말해주세요.`;
+  }
+  return "좋아요. 실행 계획에 필요한 정보를 조금만 더 채워볼게요.";
 }
 
 async function normalizeControllerResponse(
@@ -518,29 +771,41 @@ async function normalizeControllerResponse(
   body: OnboardingControllerRequest,
   result: OnboardingControllerResponse,
 ): Promise<OnboardingControllerResponse> {
-  if (body.current_step === "mini" || body.current_step === "plus" || body.current_step === "elite") {
-    return normalizeElasticLevelResponse(client, body, result);
+  void client;
+  if (body.current_step === "mini" || body.current_step === "plus" || body.current_step === "elite") return result;
+  if (body.current_step === "habit_action") return normalizeHabitPlanResult(body, result);
+
+  return result;
+}
+
+function normalizeHabitPlanResult(
+  body: OnboardingControllerRequest,
+  result: OnboardingControllerResponse,
+): OnboardingControllerResponse {
+  const nextData: OnboardingData = { ...body.data };
+  for (const patch of result.data_patch) {
+    nextData[patch.field] = patch.value;
   }
-  if (body.current_step !== "habit_action") return result;
 
-  const habitActionPatch = result.data_patch.find((patch) => patch.field === "habitAction");
-  const proposed = habitActionPatch?.value.trim() ?? "";
+  if (!nextData.habitAction || !nextData.habitAmount || (!nextData.habitFrequency && !nextData.habitWhen)) {
+    return {
+      ...result,
+      should_advance: false,
+      next_step: "habit_action",
+      reply: result.reply || getMissingHabitPlanReply(nextData),
+    };
+  }
 
-  if (!habitActionPatch) return result;
-  const review = await reviewHabitAction(client, body, proposed);
-  if (review.decision !== "save") {
-    return stay(
-      "habit_action",
-      {},
-      review.reply,
-    );
+  if (!nextData.habitPeriod) {
+    nextData.habitPeriod = "4주";
   }
 
   return {
     ...result,
-    data_patch: result.data_patch.map((patch) =>
-      patch.field === "habitAction" && review.habit_action ? { ...patch, value: review.habit_action } : patch,
-    ),
+    should_advance: true,
+    next_step: "goal_complete",
+    data_patch: toPatchArray(createHabitPlanPatch(body.data, nextData)),
+    reply: `좋아요. 이렇게 실행 계획을 잡아볼게요.\n\n${formatHabitPlanSummary(nextData)}\n\n이제 이 행동을 Mini / Plus / Elite로 나눠서, 컨디션이 낮은 날에도 완전히 실패한 날이 되지 않게 만들 거예요.`,
   };
 }
 
@@ -725,7 +990,7 @@ function fallbackTurn(body: OnboardingControllerRequest): OnboardingControllerRe
     case "bridge":
       return { intent: "continue", should_advance: true, next_step: "bridge", data_patch: [], reply: "" };
     case "habit_action":
-      return advance("habit_action", { habitAction: text }, "며칠 동안 실험해볼까요? 7일, 14일, 28일 중 선택해주세요.");
+      return stay("habit_action", {}, "기간, 빈도, 언제, 행동, 양을 한 문장으로 말해주세요. 예: 4주 동안 주 3회, 퇴근 후 헬스장에서 웨이트 3종목을 60분 하기");
     case "habit_period":
       return advance("habit_period", { habitPeriod: text }, "일주일에 몇 번 할 계획인가요?");
     case "habit_frequency":
