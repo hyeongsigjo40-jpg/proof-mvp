@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { ArrowUp, CalendarCheck, Check, Circle, Flame, MessageCircle, Minus, PencilLine, Target } from "lucide-react";
 import { AuthPanel } from "@/components/AuthPanel";
 import { LoadingState } from "@/components/LoadingState";
@@ -52,6 +53,8 @@ type DailyPatternTurn = {
   user: string;
   assistant: string;
 };
+
+type DailyStage = "checkin" | "tomorrow_confirm" | "tomorrow_edit" | "done";
 
 type OnboardingData = {
   lifeArea: string;
@@ -167,6 +170,7 @@ export default function Home() {
   const [memo, setMemo] = useState("");
   const [patternInput, setPatternInput] = useState("");
   const [dailyPatternTurns, setDailyPatternTurns] = useState<DailyPatternTurn[]>([]);
+  const [dailyStage, setDailyStage] = useState<DailyStage>("checkin");
   const [nextMini, setNextMini] = useState("");
   const [nextPlus, setNextPlus] = useState("");
   const [nextElite, setNextElite] = useState("");
@@ -217,6 +221,13 @@ export default function Home() {
       if (today) {
         setSelectedCheckIn(today.result);
         setMemo(today.memo ?? "");
+        setDailyStage("done");
+        setMessages([
+          {
+            role: "assistant",
+            text: `오늘 기록은 이미 ${statusMeta[today.result].label}로 저장되어 있어요.\n필요하면 아래에서 오늘 기록을 수정할 수 있습니다.`,
+          },
+        ]);
       }
     }
 
@@ -366,23 +377,88 @@ export default function Home() {
       applySavedCheckIn(saved);
       const nextCheckIns = upsertCheckIn(checkIns, saved);
       setCheckIns(nextCheckIns);
-      const contextualReply = await createContextualReply("checkin_saved", data, nextCheckIns);
       setMessages((current) => [
         ...current,
         { role: "user", text: `${statusMeta[status].label}\n${trimmed}` },
         ...(hasSelfNarrative
           ? [{ role: "assistant" as const, text: "기억하시죠, 오늘은 그 사람인지가 아니라 이 행동을 했는지만 보기로 했었죠" }]
           : []),
-        { role: "assistant", text: `${coachReply}\n\n${contextualReply}` },
+        { role: "assistant", text: `${coachReply}\n\n내일도 습관 목표를 그대로 가져갈까요?` },
       ]);
       setMiniFailureCount((current) => (status === "not_done" ? current + 1 : 0));
       setMemo(patternMemo);
       setDailyPatternTurns(patternTurns);
       setPatternInput("");
+      setDailyStage("tomorrow_confirm");
       setSaveMessage(null);
     } finally {
       setPending(false);
     }
+  }
+
+  async function keepTomorrowPlan() {
+    setMessages((current) => [
+      ...current,
+      { role: "user", text: "그대로 가져갈게요" },
+      {
+        role: "assistant",
+        text: `좋아요. 내일도 "${data.habitAction || "이 습관"}" 목표를 그대로 이어갈게요.\n내일도 작게라도 꾸준히 가봅시다.`,
+      },
+    ]);
+    setDailyStage("done");
+  }
+
+  function requestTomorrowEdit() {
+    setMessages((current) => [
+      ...current,
+      { role: "user", text: "내일 목표를 조금 바꿀게요" },
+      { role: "assistant", text: "좋아요. 내일은 어떻게 낮추거나 바꿔볼까요? Mini만 적어도 충분해요." },
+    ]);
+    setPatternInput("");
+    setDailyStage("tomorrow_edit");
+  }
+
+  async function saveTomorrowAdjustment(text: string) {
+    const trimmed = text.trim();
+    if (!userId || !trimmed) return;
+
+    setPending(true);
+    try {
+      const nextTasks = {
+        mini_task: trimmed,
+        plus_task: nextPlus || data.plusTask,
+        elite_task: nextElite || data.eliteTask,
+      };
+      await updateElasticTasks(userId, nextTasks, storageScope);
+      const nextData = {
+        ...data,
+        miniTask: nextTasks.mini_task,
+        plusTask: nextTasks.plus_task,
+        eliteTask: nextTasks.elite_task,
+      };
+      setData(nextData);
+      setNextMini(nextTasks.mini_task);
+      setMessages((current) => [
+        ...current,
+        { role: "user", text: trimmed },
+        { role: "assistant", text: `좋아요. 내일 Mini는 "${trimmed}"로 가져갈게요.\n내일도 작게라도 꾸준히 가봅시다.` },
+      ]);
+      setPatternInput("");
+      setDailyStage("done");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  function editTodayCheckIn() {
+    setMessages((current) => [
+      ...current,
+      { role: "user", text: "오늘 기록 수정할게요" },
+      { role: "assistant", text: DAILY_CHECKIN_PROMPT },
+    ]);
+    setSelectedCheckIn(null);
+    setPatternInput("");
+    setDailyStage("checkin");
   }
 
   async function saveNextPlan() {
@@ -453,6 +529,7 @@ export default function Home() {
     setMemo("");
     setPatternInput("");
     setDailyPatternTurns([]);
+    setDailyStage("checkin");
     setNextMini("");
     setNextPlus("");
     setNextElite("");
@@ -519,6 +596,7 @@ export default function Home() {
     setMemo("");
     setPatternInput("");
     setDailyPatternTurns([]);
+    setDailyStage("checkin");
     setMode("daily");
     setStep("complete");
     setMessages([
@@ -716,7 +794,18 @@ export default function Home() {
         <section className="month-grid" aria-label="이번 달 기록">
           {records.map((record) => {
             const Icon = statusMeta[record.status].icon;
-            return (
+            const checkIn = checkIns.find((item) => Number(item.checkin_date.slice(-2)) === record.day) ?? null;
+            return checkIn ? (
+              <Link
+                aria-label={`${record.day}일 기록 ${statusMeta[record.status].label}`}
+                className={`day-cell ${record.status}`}
+                href={`/record?date=${checkIn.checkin_date}&scope=${encodeURIComponent(storageScope)}`}
+                key={record.day}
+              >
+                <span>{record.day}</span>
+                <Icon size={17} aria-hidden="true" />
+              </Link>
+            ) : (
               <div className={`day-cell ${record.status}`} key={record.day}>
                 <span>{record.day}</span>
                 <Icon size={17} aria-hidden="true" />
@@ -765,11 +854,16 @@ export default function Home() {
             ) : (
               <DailyCheckIn
                 pending={pending}
+                stage={dailyStage}
                 patternInput={patternInput}
                 selectedCheckIn={selectedCheckIn}
                 setPatternInput={setPatternInput}
                 onCheckIn={handleCheckIn}
+                onEditToday={editTodayCheckIn}
+                onKeepTomorrowPlan={keepTomorrowPlan}
                 onSaveCheckIn={saveDailyCheckIn}
+                onSaveTomorrowAdjustment={saveTomorrowAdjustment}
+                onRequestTomorrowEdit={requestTomorrowEdit}
               />
             )}
 
@@ -777,6 +871,7 @@ export default function Home() {
               <OnboardingDebugPanel
                 data={data}
                 dailyPatternTurns={dailyPatternTurns}
+                dailyStage={dailyStage}
                 events={debugEvents}
                 goalData={goalData}
                 memo={memo}
@@ -820,6 +915,7 @@ const INTENT_COLOR: Record<string, string> = {
 function OnboardingDebugPanel({
   data,
   dailyPatternTurns,
+  dailyStage,
   events,
   goalData,
   memo,
@@ -839,6 +935,7 @@ function OnboardingDebugPanel({
 }: {
   data: OnboardingData;
   dailyPatternTurns: DailyPatternTurn[];
+  dailyStage: DailyStage;
   events: OnboardingDebugEvent[];
   goalData: GoalData;
   memo: string;
@@ -875,6 +972,7 @@ function OnboardingDebugPanel({
   ];
   const dailyFields: [string, string][] = [
     ["mode", mode],
+    ["dailyStage", dailyStage],
     ["선택", selectedCheckIn ? statusMeta[selectedCheckIn].label : ""],
     ["선택 raw", selectedCheckIn ?? ""],
     ["패턴 입력", patternInput],
@@ -1082,19 +1180,33 @@ function DailyCheckIn({
   pending,
   patternInput,
   selectedCheckIn,
+  stage,
   setPatternInput,
   onCheckIn,
+  onEditToday,
+  onKeepTomorrowPlan,
   onSaveCheckIn,
+  onSaveTomorrowAdjustment,
+  onRequestTomorrowEdit,
 }: {
   pending: boolean;
   patternInput: string;
   selectedCheckIn: CheckInStatus | null;
+  stage: DailyStage;
   setPatternInput: (value: string) => void;
   onCheckIn: (status: Exclude<CheckInStatus, "open" | "no_response">) => void;
+  onEditToday: () => void;
+  onKeepTomorrowPlan: () => void;
   onSaveCheckIn: (status: Exclude<CheckInStatus, "open" | "no_response">, text: string) => void;
+  onSaveTomorrowAdjustment: (text: string) => void;
+  onRequestTomorrowEdit: () => void;
 }) {
   function handlePatternSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (stage === "tomorrow_edit") {
+      onSaveTomorrowAdjustment(patternInput);
+      return;
+    }
     if (!selectedCheckIn || selectedCheckIn === "open" || selectedCheckIn === "no_response") return;
     onSaveCheckIn(selectedCheckIn, patternInput);
   }
@@ -1108,47 +1220,68 @@ function DailyCheckIn({
 
   return (
     <div className="daily-chat-checkin">
-      <div className="checkin-buttons daily-quick-replies" aria-label="오늘 상태 선택">
-        <button className={selectedCheckIn === "mini" ? "selected mini" : "mini"} disabled={pending} onClick={() => onCheckIn("mini")} type="button">
-          Mini
-        </button>
-        <button className={selectedCheckIn === "plus" ? "selected plus" : "plus"} disabled={pending} onClick={() => onCheckIn("plus")} type="button">
-          Plus
-        </button>
-        <button className={selectedCheckIn === "elite" ? "selected elite" : "elite"} disabled={pending} onClick={() => onCheckIn("elite")} type="button">
-          Elite
-        </button>
-        <button
-          className={selectedCheckIn === "not_done" ? "selected not-done" : "not-done"}
-          disabled={pending}
-          onClick={() => onCheckIn("not_done")}
-          type="button"
-        >
-          기록만함
-        </button>
-      </div>
+      {stage === "checkin" ? (
+        <div className="checkin-buttons daily-quick-replies" aria-label="오늘 상태 선택">
+          <button className={selectedCheckIn === "mini" ? "selected mini" : "mini"} disabled={pending} onClick={() => onCheckIn("mini")} type="button">
+            Mini
+          </button>
+          <button className={selectedCheckIn === "plus" ? "selected plus" : "plus"} disabled={pending} onClick={() => onCheckIn("plus")} type="button">
+            Plus
+          </button>
+          <button className={selectedCheckIn === "elite" ? "selected elite" : "elite"} disabled={pending} onClick={() => onCheckIn("elite")} type="button">
+            Elite
+          </button>
+          <button
+            className={selectedCheckIn === "not_done" ? "selected not-done" : "not-done"}
+            disabled={pending}
+            onClick={() => onCheckIn("not_done")}
+            type="button"
+          >
+            기록만함
+          </button>
+        </div>
+      ) : null}
 
-      <form className="chat-composer daily-chat-composer" onSubmit={handlePatternSubmit}>
-        <textarea
-          disabled={pending}
-          value={patternInput}
-          onKeyDown={handleKeyDown}
-          onChange={(event) => setPatternInput(event.target.value)}
-          placeholder={
-            selectedCheckIn
-              ? "예: 퇴근하고 바로 누우니까 다시 시작하기가 어려웠어요."
-              : "먼저 Mini, Plus, Elite, 기록만함 중 하나를 골라주세요."
-          }
-          rows={1}
-        />
-        <button
-          aria-label="오늘 습관 기록 보내기"
-          disabled={pending || !selectedCheckIn || !patternInput.trim()}
-          type="submit"
-        >
-          <ArrowUp size={18} aria-hidden="true" />
-        </button>
-      </form>
+      {stage === "tomorrow_confirm" ? (
+        <div className="daily-quick-replies tomorrow-replies" aria-label="내일 목표 확인">
+          <button disabled={pending} onClick={onKeepTomorrowPlan} type="button">그대로 가져가기</button>
+          <button disabled={pending} onClick={onRequestTomorrowEdit} type="button">조금 바꾸기</button>
+          <button disabled={pending} onClick={onEditToday} type="button">오늘 기록 수정</button>
+        </div>
+      ) : null}
+
+      {stage === "done" ? (
+        <div className="daily-quick-replies tomorrow-replies" aria-label="오늘 기록 완료">
+          <span className="daily-done-chip">오늘 기록 완료</span>
+          <button disabled={pending} onClick={onEditToday} type="button">오늘 기록 수정</button>
+        </div>
+      ) : null}
+
+      {(stage === "checkin" || stage === "tomorrow_edit") ? (
+        <form className="chat-composer daily-chat-composer" onSubmit={handlePatternSubmit}>
+          <textarea
+            disabled={pending}
+            value={patternInput}
+            onKeyDown={handleKeyDown}
+            onChange={(event) => setPatternInput(event.target.value)}
+            placeholder={
+              stage === "tomorrow_edit"
+                ? "예: 내일은 집에 오자마자 1분만 기록하기"
+                : selectedCheckIn
+                  ? "예: 퇴근하고 바로 누우니까 다시 시작하기가 어려웠어요."
+                  : "먼저 Mini, Plus, Elite, 기록만함 중 하나를 골라주세요."
+            }
+            rows={1}
+          />
+          <button
+            aria-label={stage === "tomorrow_edit" ? "내일 목표 보내기" : "오늘 습관 기록 보내기"}
+            disabled={pending || (stage === "checkin" && !selectedCheckIn) || !patternInput.trim()}
+            type="submit"
+          >
+            <ArrowUp size={18} aria-hidden="true" />
+          </button>
+        </form>
+      ) : null}
     </div>
   );
 }

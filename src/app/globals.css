@@ -525,6 +525,139 @@ blockquote {
   color: var(--danger);
 }
 
+.status-chip.mini {
+  background: rgba(49, 145, 55, 0.14);
+  color: #318a37;
+}
+
+.status-chip.plus {
+  background: rgba(91, 73, 214, 0.13);
+  color: #5b49d6;
+}
+
+.status-chip.elite {
+  background: rgba(224, 48, 48, 0.13);
+  color: #d93030;
+}
+
+.record-notebook-page {
+  max-width: 1180px;
+}
+
+.record-notebook-heading {
+  align-items: start;
+  display: flex;
+  gap: 18px;
+  justify-content: space-between;
+}
+
+.record-notebook {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(230px, 320px) minmax(0, 1fr);
+  margin-top: 20px;
+}
+
+.record-date-list,
+.record-note {
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+
+.record-date-list {
+  align-content: start;
+  display: grid;
+  gap: 6px;
+  max-height: calc(100dvh - 220px);
+  overflow: auto;
+  padding: 10px;
+}
+
+.record-date-row {
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--text);
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  padding: 11px 10px;
+}
+
+.record-date-row:hover,
+.record-date-row.active {
+  background: var(--surface-strong);
+  border-color: var(--line);
+}
+
+.record-date-row > span {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 850;
+}
+
+.record-note {
+  display: grid;
+  gap: 16px;
+  min-height: 420px;
+  padding: 20px;
+}
+
+.record-note-header {
+  align-items: start;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  gap: 14px;
+  justify-content: space-between;
+  padding-bottom: 16px;
+}
+
+.record-note-header h2 {
+  font-size: clamp(28px, 4vw, 44px);
+  line-height: 1.05;
+  margin: 6px 0 0;
+}
+
+.record-note-body {
+  display: grid;
+  gap: 14px;
+}
+
+.record-note-block {
+  background: rgba(250, 250, 247, 0.82);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+}
+
+.record-note-label {
+  align-items: center;
+  color: var(--primary);
+  display: flex;
+  font-size: 13px;
+  font-weight: 900;
+  gap: 7px;
+}
+
+.record-note-label.proof {
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+.record-note-block p,
+.record-note-empty {
+  color: var(--text);
+  font-size: 17px;
+  line-height: 1.55;
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .side-nav {
   backdrop-filter: blur(18px);
   background: rgba(255, 255, 255, 0.86);
@@ -892,12 +1025,18 @@ blockquote {
   align-items: center;
   border: 1px solid var(--line);
   border-radius: 8px;
+  cursor: pointer;
   display: grid;
   gap: 5px;
   justify-items: center;
   min-width: 0;
   min-height: 52px;
   padding: 6px 2px;
+}
+
+.day-cell[href]:hover {
+  border-color: currentColor;
+  box-shadow: inset 0 0 0 1px currentColor;
 }
 
 .day-cell span {
@@ -1402,6 +1541,28 @@ blockquote {
   padding-inline: 4px;
 }
 
+.tomorrow-replies button,
+.daily-done-chip {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--primary);
+  font-size: 13px;
+  font-weight: 850;
+  min-height: 36px;
+  padding: 8px 12px;
+}
+
+.tomorrow-replies button {
+  cursor: pointer;
+}
+
+.daily-done-chip {
+  align-items: center;
+  background: rgba(49, 91, 76, 0.1);
+  display: inline-flex;
+}
+
 .checkin-buttons button {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -1781,9 +1942,14 @@ blockquote {
   }
 
   .elastic-grid,
+  .record-notebook,
   .scorecard-strip,
   .scorecard-columns {
     grid-template-columns: 1fr;
+  }
+
+  .record-date-list {
+    max-height: 260px;
   }
 
   .scorecard-columns section {

@@ -1,100 +1,177 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowRight } from "lucide-react";
+import { useSearchParams } from "next/navigation";
+import { ArrowLeft, BookOpen } from "lucide-react";
 import { LoadingState } from "@/components/LoadingState";
-import { copy, resultLabels } from "@/lib/copy";
-import { formatDate, isThisWeek } from "@/lib/date";
-import { getRecords } from "@/lib/proof-store";
+import { formatDate } from "@/lib/date";
+import { getElasticCheckIns, LIVE_ELASTIC_SCOPE } from "@/lib/elastic-store";
+import type { ElasticCheckIn, ElasticCheckInStatus } from "@/lib/elastic-types";
 import { useProofSession } from "@/lib/use-proof-session";
-import type { RecordItem } from "@/types/proof";
+
+type ParsedMemo = {
+  fallback: string;
+  patterns: {
+    user: string;
+    assistant: string;
+  }[];
+};
+
+const statusLabels: Record<ElasticCheckInStatus, string> = {
+  mini: "Mini",
+  plus: "Plus",
+  elite: "Elite",
+  not_done: "기록만함",
+  no_response: "무응답",
+};
 
 export default function RecordPage() {
+  return (
+    <Suspense fallback={<LoadingState />}>
+      <RecordNotebook />
+    </Suspense>
+  );
+}
+
+function RecordNotebook() {
   const { loading, userId, error } = useProofSession();
-  const [records, setRecords] = useState<RecordItem[]>([]);
+  const searchParams = useSearchParams();
+  const selectedDate = searchParams.get("date");
+  const scope = searchParams.get("scope") || LIVE_ELASTIC_SCOPE;
+  const [checkIns, setCheckIns] = useState<ElasticCheckIn[]>([]);
   const [recordError, setRecordError] = useState<string | null>(null);
 
   useEffect(() => {
     async function load() {
-      if (!userId) {
-        return;
-      }
+      if (!userId) return;
 
       try {
-        setRecords(await getRecords(userId));
+        setCheckIns(await getElasticCheckIns(userId, scope));
       } catch (caught) {
         setRecordError(caught instanceof Error ? caught.message : "기록을 불러오지 못했어요.");
       }
     }
 
     void load();
-  }, [userId]);
+  }, [scope, userId]);
 
-  const weeklyStats = useMemo(() => {
-    const weeklyRecords = records.filter((record) => isThisWeek(record.date));
-    const completedCount = weeklyRecords.filter(
-      (record) => record.check_in?.result === "done" || record.check_in?.result === "partial",
-    ).length;
-    const counts = {
-      done: weeklyRecords.filter((record) => record.check_in?.result === "done").length,
-      partial: weeklyRecords.filter((record) => record.check_in?.result === "partial").length,
-      no_response: weeklyRecords.filter((record) => record.check_in?.result === "no_response").length,
-      not_done: weeklyRecords.filter((record) => record.check_in?.result === "not_done").length,
-    };
-    return { total: weeklyRecords.length, completedCount, counts };
-  }, [records]);
+  const sortedCheckIns = useMemo(
+    () => [...checkIns].sort((a, b) => b.checkin_date.localeCompare(a.checkin_date)),
+    [checkIns],
+  );
+  const selectedCheckIn = useMemo(
+    () =>
+      sortedCheckIns.find((checkIn) => checkIn.checkin_date === selectedDate) ??
+      sortedCheckIns[0] ??
+      null,
+    [selectedDate, sortedCheckIns],
+  );
+  const selectedMemo = useMemo(() => parseCheckInMemo(selectedCheckIn?.memo ?? null), [selectedCheckIn]);
 
-  if (loading) {
-    return <LoadingState />;
-  }
+  if (loading) return <LoadingState />;
 
   return (
-    <main className="page-shell">
-      <section className="page-heading">
-        <p className="eyebrow">A3 트랙레코드</p>
-        <h1>{copy.recordTitle}</h1>
-        <p>
-          이번 주 {weeklyStats.total}번 중 {weeklyStats.completedCount}번 실행
-        </p>
+    <main className="page-shell record-notebook-page">
+      <section className="page-heading record-notebook-heading">
+        <div>
+          <p className="eyebrow">Habit Notebook</p>
+          <h1>습관 기록장</h1>
+          <p>날짜별로 남긴 선택, 패턴, Proof 응답을 메모처럼 다시 봅니다.</p>
+        </div>
+        <Link className="secondary-action" href="/">
+          <ArrowLeft size={17} aria-hidden="true" />
+          트래커로
+        </Link>
       </section>
 
       {error || recordError ? <p className="error-text">{error ?? recordError}</p> : null}
 
-      {records.length > 0 ? (
-        <section className="count-row" aria-label="이번 주 상태별 기록">
-          <span>완료 {weeklyStats.counts.done}</span>
-          <span>일부 {weeklyStats.counts.partial}</span>
-          <span>응답 없음 {weeklyStats.counts.no_response}</span>
-          <span>하지 않음 {weeklyStats.counts.not_done}</span>
-        </section>
-      ) : null}
-
-      {records.length === 0 ? (
+      {sortedCheckIns.length === 0 ? (
         <section className="empty-state">
-          <p>{copy.emptyRecord}</p>
-          <Link className="primary-button wide-button" href="/evening">
-            저녁 회고로 가기
-            <ArrowRight size={18} aria-hidden="true" />
+          <p>아직 저장된 습관 기록이 없습니다.</p>
+          <Link className="primary-button wide-button" href="/">
+            오늘 체크인으로 가기
           </Link>
         </section>
       ) : (
-        <div className="record-list">
-          {records.map((record) => (
-            <article className="record-item" key={record.id}>
-              <div>
-                <time>{formatDate(record.date)}</time>
-                <p>{record.plan_text}</p>
-                {record.minimum_plan_text ? <small>최소 버전: {record.minimum_plan_text}</small> : null}
-                {record.check_in?.context_text ? <blockquote>{record.check_in.context_text}</blockquote> : null}
-              </div>
-              <span className={`status-chip ${record.check_in?.result ?? "pending"}`}>
-                {record.check_in ? resultLabels[record.check_in.result] : "확인 전"}
-              </span>
+        <section className="record-notebook">
+          <aside className="record-date-list" aria-label="날짜별 습관 기록">
+            {sortedCheckIns.map((checkIn) => (
+              <Link
+                className={checkIn.checkin_date === selectedCheckIn?.checkin_date ? "record-date-row active" : "record-date-row"}
+                href={`/record?date=${checkIn.checkin_date}&scope=${encodeURIComponent(scope)}`}
+                key={checkIn.id}
+              >
+                <span>{formatDate(checkIn.checkin_date)}</span>
+                <strong className={`status-chip ${checkIn.result}`}>{statusLabels[checkIn.result]}</strong>
+              </Link>
+            ))}
+          </aside>
+
+          {selectedCheckIn ? (
+            <article className="record-note">
+              <header className="record-note-header">
+                <div>
+                  <p className="eyebrow">Daily Note</p>
+                  <h2>{formatDate(selectedCheckIn.checkin_date)}</h2>
+                </div>
+                <span className={`status-chip ${selectedCheckIn.result}`}>{statusLabels[selectedCheckIn.result]}</span>
+              </header>
+
+              {selectedMemo.patterns.length ? (
+                <div className="record-note-body">
+                  {selectedMemo.patterns.map((pattern, index) => (
+                    <section className="record-note-block" key={`${pattern.user}-${index}`}>
+                      <div className="record-note-label">
+                        <BookOpen size={16} aria-hidden="true" />
+                        <span>오늘의 패턴</span>
+                      </div>
+                      <p>{pattern.user}</p>
+                      {pattern.assistant ? (
+                        <>
+                          <div className="record-note-label proof">
+                            <span>Proof 응답</span>
+                          </div>
+                          <p>{pattern.assistant}</p>
+                        </>
+                      ) : null}
+                    </section>
+                  ))}
+                </div>
+              ) : (
+                <p className="record-note-empty">{selectedMemo.fallback || "이 날짜에는 세부 메모가 없습니다."}</p>
+              )}
             </article>
-          ))}
-        </div>
+          ) : null}
+        </section>
       )}
     </main>
   );
+}
+
+function parseCheckInMemo(memo: string | null): ParsedMemo {
+  if (!memo) return { fallback: "", patterns: [] };
+
+  const lines = memo.split("\n").map((line) => line.trim()).filter(Boolean);
+  const patterns: ParsedMemo["patterns"] = [];
+
+  for (const line of lines) {
+    const patternMatch = line.match(/^\[패턴 \d+\]\s*(.*)$/);
+    if (patternMatch) {
+      patterns.push({ user: patternMatch[1] ?? "", assistant: "" });
+      continue;
+    }
+
+    const replyMatch = line.match(/^\[코치 응답 \d+\]\s*(.*)$/);
+    if (replyMatch) {
+      const last = patterns.at(-1);
+      if (last) last.assistant = replyMatch[1] ?? "";
+    }
+  }
+
+  return {
+    fallback: lines.filter((line) => !line.startsWith("[오늘의 선택]")).join("\n"),
+    patterns,
+  };
 }

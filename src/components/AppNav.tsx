@@ -2,10 +2,11 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Home, Settings } from "lucide-react";
+import { Home, NotebookText, Settings } from "lucide-react";
 
 const items = [
   { href: "/", label: "홈", icon: Home },
+  { href: "/record", label: "기록", icon: NotebookText },
   { href: "/settings", label: "설정", icon: Settings },
 ];
 
