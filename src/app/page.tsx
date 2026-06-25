@@ -112,6 +112,7 @@ type HabitTaskPatchControllerResult = {
 
 type DailyRecord = {
   day: number;
+  dateKey: string;
   status: CheckInStatus;
 };
 
@@ -166,6 +167,7 @@ const MINI_OPENING = (habitAction: string) =>
 
 const initialMessages: Message[] = [];
 const DEBUG_SESSION_KEY = "proof-elastic-debug-session";
+const KOREAN_WEEKDAYS = ["일요일", "월요일", "화요일", "수요일", "목요일", "금요일", "토요일"];
 
 function createDebugSessionId() {
   return crypto.randomUUID();
@@ -200,7 +202,7 @@ export default function Home() {
   const [step, setStep] = useState<OnboardingStep>("goal_area");
   const [goalData, setGoalData] = useState<GoalData>(emptyGoalData);
   const [data, setData] = useState<OnboardingData>(emptyOnboarding);
-  const [records, setRecords] = useState<DailyRecord[]>(createMonthRecords([]));
+  const [records, setRecords] = useState<DailyRecord[]>(createMonthRecords([], todayKey()));
   const [checkIns, setCheckIns] = useState<ElasticCheckIn[]>([]);
   const [messages, setMessages] = useState<Message[]>(initialMessages);
   const [input, setInput] = useState("");
@@ -249,7 +251,7 @@ export default function Home() {
       }
 
       setCheckIns(checkIns);
-      setRecords(createMonthRecords(checkIns));
+      setRecords(createMonthRecords(checkIns, activeCheckInDate));
       const today = checkIns.find((checkIn) => checkIn.checkin_date === activeCheckInDate);
       if (today) {
         setSelectedCheckIn(today.result);
@@ -668,7 +670,7 @@ export default function Home() {
     setStep("goal_area");
     setGoalData(emptyGoalData);
     setData(emptyOnboarding);
-    setRecords(createMonthRecords([]));
+    setRecords(createMonthRecords([], activeCheckInDate));
     setCheckIns([]);
     setMessages([]);
     setInput("");
@@ -780,7 +782,7 @@ export default function Home() {
   function applySavedCheckIn(checkIn: ElasticCheckIn) {
     setRecords((current) =>
       current.map((record) =>
-        record.day === Number(checkIn.checkin_date.slice(-2)) ? { ...record, status: checkIn.result } : record,
+        record.dateKey === checkIn.checkin_date ? { ...record, status: checkIn.result } : record,
       ),
     );
     setSelectedCheckIn(checkIn.result);
@@ -802,6 +804,8 @@ export default function Home() {
 
   const isGoalPhase = step !== "mini" && step !== "plus" && step !== "elite" && step !== "complete";
   const trackerSubtitle = buildSmartSentence(data);
+  const calendarMeta = getCalendarMeta(activeCheckInDate);
+  const calendarCells = createCalendarCells(records, calendarMeta.firstWeekday);
 
   return (
     <main className="tracker-workspace">
@@ -895,27 +899,54 @@ export default function Home() {
           </div>
         </section>
 
-        <section className="month-grid" aria-label="이번 달 기록">
-          {records.map((record) => {
-            const Icon = statusMeta[record.status].icon;
-            const checkIn = checkIns.find((item) => Number(item.checkin_date.slice(-2)) === record.day) ?? null;
-            return checkIn ? (
-              <Link
-                aria-label={`${record.day}일 기록 ${statusMeta[record.status].label}`}
-                className={`day-cell ${record.status}`}
-                href={`/record?date=${checkIn.checkin_date}&scope=${encodeURIComponent(storageScope)}`}
-                key={record.day}
-              >
-                <span>{record.day}</span>
-                <Icon size={17} aria-hidden="true" />
-              </Link>
-            ) : (
-              <div className={`day-cell ${record.status}`} key={record.day}>
-                <span>{record.day}</span>
-                <Icon size={17} aria-hidden="true" />
-              </div>
-            );
-          })}
+        <section className="calendar-board" aria-label={`${calendarMeta.koreanMonth} 기록 달력`}>
+          <div className="calendar-heading">
+            <strong>{calendarMeta.englishMonth}</strong>
+            <span>{calendarMeta.koreanMonth}</span>
+          </div>
+          <div className="calendar-weekdays" aria-hidden="true">
+            {KOREAN_WEEKDAYS.map((weekday) => (
+              <span key={weekday}>{weekday}</span>
+            ))}
+          </div>
+          <div className="month-grid">
+            {calendarCells.map((record, index) => {
+              if (!record) {
+                return <div className="day-cell is-empty" key={`empty-${index}`} aria-hidden="true" />;
+              }
+
+              const Icon = statusMeta[record.status].icon;
+              const checkIn = checkIns.find((item) => item.checkin_date === record.dateKey) ?? null;
+              const isToday = record.dateKey === activeCheckInDate;
+              const showStatus = record.status !== "open";
+              return checkIn ? (
+                <Link
+                  aria-label={`${record.day}일 기록 ${statusMeta[record.status].label}`}
+                  className={`day-cell ${record.status}${isToday ? " is-today" : ""}`}
+                  href={`/record?date=${checkIn.checkin_date}&scope=${encodeURIComponent(storageScope)}`}
+                  key={record.dateKey}
+                >
+                  <span>{record.day}</span>
+                  {showStatus ? (
+                    <div className="day-status">
+                      <Icon size={17} aria-hidden="true" />
+                      <small>{statusMeta[record.status].label}</small>
+                    </div>
+                  ) : null}
+                </Link>
+              ) : (
+                <div className={`day-cell ${record.status}${isToday ? " is-today" : ""}`} key={record.dateKey}>
+                  <span>{record.day}</span>
+                  {showStatus ? (
+                    <div className="day-status">
+                      <Icon size={17} aria-hidden="true" />
+                      <small>{statusMeta[record.status].label}</small>
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
         </section>
       </section>
       )}
@@ -1870,12 +1901,50 @@ async function createContextualReply(
   }
 }
 
-function createMonthRecords(checkIns: ElasticCheckIn[]): DailyRecord[] {
-  const byDay = new Map(checkIns.map((checkIn) => [Number(checkIn.checkin_date.slice(-2)), checkIn.result]));
-  return Array.from({ length: 31 }, (_, index) => {
+function createMonthRecords(checkIns: ElasticCheckIn[], dateKey: string): DailyRecord[] {
+  const { year, monthIndex, daysInMonth, monthKey } = getCalendarMeta(dateKey);
+  const byDate = new Map(
+    checkIns
+      .filter((checkIn) => checkIn.checkin_date.startsWith(monthKey))
+      .map((checkIn) => [checkIn.checkin_date, checkIn.result]),
+  );
+
+  return Array.from({ length: daysInMonth }, (_, index) => {
     const day = index + 1;
-    return { day, status: byDay.get(day) ?? "open" };
+    const recordDateKey = todayKey(new Date(year, monthIndex, day));
+    return { day, dateKey: recordDateKey, status: byDate.get(recordDateKey) ?? "open" };
   });
+}
+
+function createCalendarCells(records: DailyRecord[], firstWeekday: number) {
+  const leadingEmptyCells = Array.from<null>({ length: firstWeekday }).fill(null);
+  const cells = [
+    ...leadingEmptyCells,
+    ...records,
+  ];
+  const trailingEmptyCount = (7 - (cells.length % 7)) % 7;
+  return [
+    ...cells,
+    ...Array.from<null>({ length: trailingEmptyCount }).fill(null),
+  ];
+}
+
+function getCalendarMeta(dateKey: string) {
+  const date = new Date(`${dateKey}T00:00:00`);
+  const year = date.getFullYear();
+  const monthIndex = date.getMonth();
+  const month = monthIndex + 1;
+  const firstDate = new Date(year, monthIndex, 1);
+  const daysInMonth = new Date(year, month, 0).getDate();
+  return {
+    year,
+    monthIndex,
+    daysInMonth,
+    firstWeekday: firstDate.getDay(),
+    monthKey: `${year}-${`${month}`.padStart(2, "0")}`,
+    englishMonth: firstDate.toLocaleString("en-US", { month: "long" }).toUpperCase(),
+    koreanMonth: `${month}월`,
+  };
 }
 
 function getBonusItems(levelCounts: { mini: number; plus: number; elite: number; notDone: number; noResponse: number }) {
