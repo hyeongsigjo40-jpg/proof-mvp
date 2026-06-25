@@ -54,7 +54,7 @@ type DailyPatternTurn = {
   assistant: string;
 };
 
-type DailyStage = "checkin" | "tomorrow_confirm" | "tomorrow_edit" | "done";
+type DailyStage = "checkin" | "tomorrow_confirm" | "pattern_chat" | "done";
 
 type OnboardingData = {
   lifeArea: string;
@@ -137,6 +137,12 @@ const statusMeta = {
   open: { label: "열림", icon: PencilLine },
 };
 
+const elasticLevelLabels: Record<ElasticLevel, string> = {
+  mini: "Mini",
+  plus: "Plus",
+  elite: "Elite",
+};
+
 const MINI_OPENING = (habitAction: string) =>
   `습관 목표가 완성됐어요. 이제 Elastic Habit의 세 단계를 설정할게요.\n\nMini는 피곤하거나 바쁜 날에도 할 수 있는 가장 작은 행동이에요. "${habitAction}"을 기준으로 Mini는 어떻게 설정할까요?\n예: 1문제만 풀기, 5분만 켜놓기`;
 
@@ -154,6 +160,12 @@ function readDebugSessionId() {
   const next = createDebugSessionId();
   window.localStorage.setItem(DEBUG_SESSION_KEY, next);
   return next;
+}
+
+function addDaysToDateKey(dateKey: string, days: number) {
+  const date = new Date(`${dateKey}T00:00:00`);
+  date.setDate(date.getDate() + days);
+  return todayKey(date);
 }
 
 export default function Home() {
@@ -180,11 +192,13 @@ export default function Home() {
   const [debugEnabled] = useState(
     () => typeof window !== "undefined" && new URLSearchParams(window.location.search).get("debug") === "1",
   );
+  const [debugCheckInDate, setDebugCheckInDate] = useState(() => todayKey());
   const [debugSessionId, setDebugSessionId] = useState(() => (debugEnabled ? readDebugSessionId() : ""));
   const [debugEvents, setDebugEvents] = useState<OnboardingDebugEvent[]>([]);
   const [goalExpanded, setGoalExpanded] = useState(false);
   const chatLogRef = useRef<HTMLDivElement | null>(null);
   const storageScope = debugEnabled ? `debug:${debugSessionId}` : LIVE_ELASTIC_SCOPE;
+  const activeCheckInDate = debugEnabled ? debugCheckInDate : todayKey();
 
   useEffect(() => {
     async function load() {
@@ -217,7 +231,7 @@ export default function Home() {
       setCheckIns(checkIns);
       setRecords(createMonthRecords(checkIns));
       setMiniFailureCount(countRecentMiniFailures(checkIns));
-      const today = checkIns.find((checkIn) => checkIn.checkin_date === todayKey());
+      const today = checkIns.find((checkIn) => checkIn.checkin_date === activeCheckInDate);
       if (today) {
         setSelectedCheckIn(today.result);
         setMemo(today.memo ?? "");
@@ -228,11 +242,18 @@ export default function Home() {
             text: `오늘 기록은 이미 ${statusMeta[today.result].label}로 저장되어 있어요.\n필요하면 아래에서 오늘 기록을 수정할 수 있습니다.`,
           },
         ]);
+      } else if (profile?.onboarding_completed_at) {
+        setSelectedCheckIn(null);
+        setMemo("");
+        setDailyPatternTurns([]);
+        setPatternInput("");
+        setDailyStage("checkin");
+        setMessages([{ role: "assistant", text: DAILY_CHECKIN_PROMPT }]);
       }
     }
 
     void load();
-  }, [userId, storageScope]);
+  }, [activeCheckInDate, userId, storageScope]);
 
   useEffect(() => {
     const chatLog = chatLogRef.current;
@@ -370,6 +391,7 @@ export default function Home() {
       const saved = await saveElasticCheckIn({
         user_id: userId,
         scope: storageScope,
+        checkin_date: activeCheckInDate,
         result: status,
         memo: patternMemo,
         self_narrative_detected: hasSelfNarrative,
@@ -383,7 +405,7 @@ export default function Home() {
         ...(hasSelfNarrative
           ? [{ role: "assistant" as const, text: "기억하시죠, 오늘은 그 사람인지가 아니라 이 행동을 했는지만 보기로 했었죠" }]
           : []),
-        { role: "assistant", text: `${coachReply}\n\n내일도 습관 목표를 그대로 가져갈까요?` },
+        { role: "assistant", text: `${coachReply}\n\n내일도 습관 목표를 그대로 가져갈까요? 아니면 오늘의 패턴에 대해서 더 이야기해볼까요?` },
       ]);
       setMiniFailureCount((current) => (status === "not_done" ? current + 1 : 0));
       setMemo(patternMemo);
@@ -408,43 +430,63 @@ export default function Home() {
     setDailyStage("done");
   }
 
-  function requestTomorrowEdit() {
+  function requestPatternChat() {
     setMessages((current) => [
       ...current,
-      { role: "user", text: "내일 목표를 조금 바꿀게요" },
-      { role: "assistant", text: "좋아요. 내일은 어떻게 낮추거나 바꿔볼까요? Mini만 적어도 충분해요." },
+      { role: "user", text: "오늘 패턴을 더 이야기해볼게요" },
+      { role: "assistant", text: "좋아요. 오늘 흐름에서 더 보고 싶은 지점을 한 문장으로 적어주세요." },
     ]);
     setPatternInput("");
-    setDailyStage("tomorrow_edit");
+    setDailyStage("pattern_chat");
   }
 
-  async function saveTomorrowAdjustment(text: string) {
+  async function savePatternFollowup(text: string) {
     const trimmed = text.trim();
-    if (!userId || !trimmed) return;
+    if (!userId || !trimmed || !selectedCheckIn || selectedCheckIn === "open" || selectedCheckIn === "no_response") return;
 
     setPending(true);
     try {
-      const nextTasks = {
-        mini_task: trimmed,
-        plus_task: nextPlus || data.plusTask,
-        elite_task: nextElite || data.eliteTask,
-      };
-      await updateElasticTasks(userId, nextTasks, storageScope);
-      const nextData = {
-        ...data,
-        miniTask: nextTasks.mini_task,
-        plusTask: nextTasks.plus_task,
-        eliteTask: nextTasks.elite_task,
-      };
-      setData(nextData);
-      setNextMini(nextTasks.mini_task);
+      const adjustment = parseTomorrowTaskAdjustment(trimmed);
+      let followupReply = createPatternFollowupReply(trimmed);
+      if (adjustment) {
+        const nextTasks = {
+          mini_task: adjustment.level === "mini" ? adjustment.task : nextMini || data.miniTask,
+          plus_task: adjustment.level === "plus" ? adjustment.task : nextPlus || data.plusTask,
+          elite_task: adjustment.level === "elite" ? adjustment.task : nextElite || data.eliteTask,
+        };
+        await updateElasticTasks(userId, nextTasks, storageScope);
+        setData((current) => ({
+          ...current,
+          miniTask: nextTasks.mini_task,
+          plusTask: nextTasks.plus_task,
+          eliteTask: nextTasks.elite_task,
+        }));
+        setNextMini(nextTasks.mini_task);
+        setNextPlus(nextTasks.plus_task);
+        setNextElite(nextTasks.elite_task);
+        followupReply = `좋아요. 내일 ${elasticLevelLabels[adjustment.level]}는 "${adjustment.task}"로 가져갈게요.`;
+      }
+      const nextTurns = [...dailyPatternTurns, { user: trimmed, assistant: followupReply }];
+      const patternMemo = createPatternMemo(selectedCheckIn, nextTurns);
+      const saved = await saveElasticCheckIn({
+        user_id: userId,
+        scope: storageScope,
+        checkin_date: activeCheckInDate,
+        result: selectedCheckIn,
+        memo: patternMemo,
+        self_narrative_detected: selfNarrativeKeywords.some((keyword) => patternMemo.includes(keyword)),
+      });
+      applySavedCheckIn(saved);
+      setCheckIns(upsertCheckIn(checkIns, saved));
+      setMemo(patternMemo);
+      setDailyPatternTurns(nextTurns);
       setMessages((current) => [
         ...current,
         { role: "user", text: trimmed },
-        { role: "assistant", text: `좋아요. 내일 Mini는 "${trimmed}"로 가져갈게요.\n내일도 작게라도 꾸준히 가봅시다.` },
+        { role: "assistant", text: `${followupReply}\n\n내일도 습관 목표를 그대로 가져갈까요?` },
       ]);
       setPatternInput("");
-      setDailyStage("done");
+      setDailyStage("tomorrow_confirm");
     } finally {
       setPending(false);
     }
@@ -481,7 +523,12 @@ export default function Home() {
 
   async function markNoResponse() {
     if (!userId) return;
-    const saved = await saveElasticCheckIn({ user_id: userId, scope: storageScope, result: "no_response" });
+    const saved = await saveElasticCheckIn({
+      user_id: userId,
+      scope: storageScope,
+      checkin_date: activeCheckInDate,
+      result: "no_response",
+    });
     applySavedCheckIn(saved);
     const nextCheckIns = upsertCheckIn(checkIns, saved);
     setCheckIns(nextCheckIns);
@@ -625,6 +672,10 @@ export default function Home() {
     setDebugEvents([]);
   }
 
+  function moveDebugCheckInDate(days: number) {
+    setDebugCheckInDate((current) => addDaysToDateKey(current, days));
+  }
+
   function applySavedCheckIn(checkIn: ElasticCheckIn) {
     setRecords((current) =>
       current.map((record) =>
@@ -641,7 +692,7 @@ export default function Home() {
   if (loading) return <LoadingState />;
 
   const isGoalPhase = step !== "mini" && step !== "plus" && step !== "elite" && step !== "complete";
-  const trackerSubtitle = buildTrackerSubtitle(data);
+  const trackerSubtitle = buildSmartSentence(data);
 
   return (
     <main className="tracker-workspace">
@@ -862,20 +913,23 @@ export default function Home() {
                 onEditToday={editTodayCheckIn}
                 onKeepTomorrowPlan={keepTomorrowPlan}
                 onSaveCheckIn={saveDailyCheckIn}
-                onSaveTomorrowAdjustment={saveTomorrowAdjustment}
-                onRequestTomorrowEdit={requestTomorrowEdit}
+                onSavePatternFollowup={savePatternFollowup}
+                onRequestPatternChat={requestPatternChat}
               />
             )}
 
             {debugEnabled ? (
               <OnboardingDebugPanel
                 data={data}
+                debugCheckInDate={activeCheckInDate}
                 dailyPatternTurns={dailyPatternTurns}
                 dailyStage={dailyStage}
                 events={debugEvents}
                 goalData={goalData}
                 memo={memo}
                 mode={mode}
+                onDebugDateToday={() => setDebugCheckInDate(todayKey())}
+                onDebugDateShift={moveDebugCheckInDate}
                 onJumpToStep={jumpToStep}
                 onJumpToDaily={jumpToDailyCheckIn}
                 onNewSession={startNewDebugSession}
@@ -914,12 +968,15 @@ const INTENT_COLOR: Record<string, string> = {
 
 function OnboardingDebugPanel({
   data,
+  debugCheckInDate,
   dailyPatternTurns,
   dailyStage,
   events,
   goalData,
   memo,
   mode,
+  onDebugDateShift,
+  onDebugDateToday,
   onJumpToStep,
   onJumpToDaily,
   onNewSession,
@@ -934,12 +991,15 @@ function OnboardingDebugPanel({
   step,
 }: {
   data: OnboardingData;
+  debugCheckInDate: string;
   dailyPatternTurns: DailyPatternTurn[];
   dailyStage: DailyStage;
   events: OnboardingDebugEvent[];
   goalData: GoalData;
   memo: string;
   mode: "onboarding" | "daily";
+  onDebugDateShift: (days: number) => void;
+  onDebugDateToday: () => void;
   onJumpToStep: (step: OnboardingStep) => void;
   onJumpToDaily: () => void;
   onNewSession: () => void;
@@ -972,6 +1032,7 @@ function OnboardingDebugPanel({
   ];
   const dailyFields: [string, string][] = [
     ["mode", mode],
+    ["checkInDate", debugCheckInDate],
     ["dailyStage", dailyStage],
     ["선택", selectedCheckIn ? statusMeta[selectedCheckIn].label : ""],
     ["선택 raw", selectedCheckIn ?? ""],
@@ -1017,6 +1078,9 @@ function OnboardingDebugPanel({
       {/* Quick actions */}
       <div className="debug-actions">
         <button className="debug-btn-accent" disabled={pending} onClick={onJumpToDaily} type="button">데일리 체크인 테스트</button>
+        <button disabled={pending} onClick={() => onDebugDateShift(-1)} type="button">날짜 -1일</button>
+        <button disabled={pending} onClick={onDebugDateToday} type="button">오늘 날짜</button>
+        <button disabled={pending} onClick={() => onDebugDateShift(1)} type="button">날짜 +1일</button>
         <button className="debug-btn-accent" disabled={pending} onClick={onSkipGoal} type="button">전체 스킵→mini</button>
         <button disabled={pending} onClick={onResetConversation} type="button">대화 초기화</button>
         <button disabled={pending} onClick={onResetSession} type="button">세션 초기화</button>
@@ -1186,8 +1250,8 @@ function DailyCheckIn({
   onEditToday,
   onKeepTomorrowPlan,
   onSaveCheckIn,
-  onSaveTomorrowAdjustment,
-  onRequestTomorrowEdit,
+  onSavePatternFollowup,
+  onRequestPatternChat,
 }: {
   pending: boolean;
   patternInput: string;
@@ -1198,13 +1262,13 @@ function DailyCheckIn({
   onEditToday: () => void;
   onKeepTomorrowPlan: () => void;
   onSaveCheckIn: (status: Exclude<CheckInStatus, "open" | "no_response">, text: string) => void;
-  onSaveTomorrowAdjustment: (text: string) => void;
-  onRequestTomorrowEdit: () => void;
+  onSavePatternFollowup: (text: string) => void;
+  onRequestPatternChat: () => void;
 }) {
   function handlePatternSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (stage === "tomorrow_edit") {
-      onSaveTomorrowAdjustment(patternInput);
+    if (stage === "pattern_chat") {
+      onSavePatternFollowup(patternInput);
       return;
     }
     if (!selectedCheckIn || selectedCheckIn === "open" || selectedCheckIn === "no_response") return;
@@ -1245,7 +1309,7 @@ function DailyCheckIn({
       {stage === "tomorrow_confirm" ? (
         <div className="daily-quick-replies tomorrow-replies" aria-label="내일 목표 확인">
           <button disabled={pending} onClick={onKeepTomorrowPlan} type="button">그대로 가져가기</button>
-          <button disabled={pending} onClick={onRequestTomorrowEdit} type="button">조금 바꾸기</button>
+          <button disabled={pending} onClick={onRequestPatternChat} type="button">패턴 더 이야기하기</button>
           <button disabled={pending} onClick={onEditToday} type="button">오늘 기록 수정</button>
         </div>
       ) : null}
@@ -1257,7 +1321,7 @@ function DailyCheckIn({
         </div>
       ) : null}
 
-      {(stage === "checkin" || stage === "tomorrow_edit") ? (
+      {(stage === "checkin" || stage === "pattern_chat") ? (
         <form className="chat-composer daily-chat-composer" onSubmit={handlePatternSubmit}>
           <textarea
             disabled={pending}
@@ -1265,8 +1329,8 @@ function DailyCheckIn({
             onKeyDown={handleKeyDown}
             onChange={(event) => setPatternInput(event.target.value)}
             placeholder={
-              stage === "tomorrow_edit"
-                ? "예: 내일은 집에 오자마자 1분만 기록하기"
+              stage === "pattern_chat"
+                ? "예: 집에 돌아오는 순간부터 에너지가 확 떨어졌어요."
                 : selectedCheckIn
                   ? "예: 퇴근하고 바로 누우니까 다시 시작하기가 어려웠어요."
                   : "먼저 Mini, Plus, Elite, 기록만함 중 하나를 골라주세요."
@@ -1274,7 +1338,7 @@ function DailyCheckIn({
             rows={1}
           />
           <button
-            aria-label={stage === "tomorrow_edit" ? "내일 목표 보내기" : "오늘 습관 기록 보내기"}
+            aria-label={stage === "pattern_chat" ? "패턴 이야기 보내기" : "오늘 습관 기록 보내기"}
             disabled={pending || (stage === "checkin" && !selectedCheckIn) || !patternInput.trim()}
             type="submit"
           >
@@ -1401,12 +1465,6 @@ function buildSmartSentence(data: OnboardingData): string {
   return `나는 ${parts.join(", ")}.`;
 }
 
-function buildTrackerSubtitle(data: OnboardingData): string {
-  const schedule = [data.habitPeriod, data.habitFrequency, data.habitWhen].filter(Boolean).join(" · ");
-  const amount = data.habitAmount ? `${data.habitAmount} 기준` : "";
-  return [schedule, amount].filter(Boolean).join(" · ");
-}
-
 function createDailyNote(status: CheckInStatus, memo: string) {
   const statusText = statusMeta[status]?.label ?? status;
   if (!memo) return statusText;
@@ -1446,6 +1504,61 @@ function createPatternCoachReply(status: CheckInStatus | null, text: string, tur
     return `좋아요. 오늘 ${statusLabel}까지 이어진 조건이 보였어요. 이 조건을 내일도 재현할 수 있게 기록해둘게요.`;
   }
   return `좋아요. 오늘은 ${statusLabel}의 흐름으로 저장했어요. 한 문장이라도 남긴 것 자체가 내일 설계를 위한 데이터예요.`;
+}
+
+function createPatternFollowupReply(text: string) {
+  const hasFriction = ["못", "막", "피곤", "늦", "누웠", "미뤘", "바빠", "까먹", "귀찮", "힘들"].some((keyword) =>
+    text.includes(keyword),
+  );
+  const hasSupport = ["했", "됐다", "잘", "쉬웠", "도움", "성공", "시작", "끝"].some((keyword) => text.includes(keyword));
+
+  if (hasFriction) {
+    return "좋아요. 그 지점은 내일의 의지 문제가 아니라, 시작 비용이 올라가는 조건으로 기록해둘게요.";
+  }
+  if (hasSupport) {
+    return "좋아요. 그 조건은 내일도 다시 써볼 수 있는 성공 단서로 기록해둘게요.";
+  }
+  return "좋아요. 오늘 패턴을 조금 더 선명하게 기록해둘게요.";
+}
+
+function parseTomorrowTaskAdjustment(text: string): { level: ElasticLevel; task: string } | null {
+  const normalized = text.trim();
+  const levelMatch = normalized.match(/(미니|mini|플러스|plus|엘리트|elite)/i);
+  const inferredLevel = inferElasticLevel(normalized);
+  const level = levelMatch ? normalizeElasticLevel(levelMatch[1]) : inferredLevel;
+  if (!level) return null;
+
+  const baseText = levelMatch ? normalized.slice((levelMatch.index ?? 0) + levelMatch[0].length) : normalized;
+  const cleaned = cleanTaskAdjustmentText(baseText);
+
+  const task = cleaned || cleanTaskAdjustmentText(normalized);
+  return task ? { level, task } : null;
+}
+
+function normalizeElasticLevel(rawLevel: string): ElasticLevel {
+  const normalized = rawLevel.toLowerCase();
+  if (normalized === "미니" || normalized === "mini") return "mini";
+  if (normalized === "플러스" || normalized === "plus") return "plus";
+  return "elite";
+}
+
+function inferElasticLevel(text: string): ElasticLevel | null {
+  if (/(1\s*분|일\s*분|최소|작게|가볍게|시작|켜기만|열기만)/.test(text)) return "mini";
+  if (/(보통|기본|10\s*분|십\s*분|플러스|plus)/i.test(text)) return "plus";
+  if (/(도전|많이|완전|엘리트|elite)/i.test(text)) return "elite";
+  return null;
+}
+
+function cleanTaskAdjustmentText(text: string) {
+  return text
+    .trim()
+    .replace(/^(그러면|그럼|일단|아예|내일은?|나는|그냥|조금|음|어|아|좀|:|\s)+/g, "")
+    .replace(/^(는|은|를|을|도|만|로|으로|:|\s)+/g, "")
+    .replace(
+      /(로|으로)?\s*(바꿔도\s*될\s*것\s*같아|바꾸면\s*될\s*것\s*같아|바꾸면\s*좋을\s*것\s*같아|바꾸고\s*싶어|바꿀래|바꿀게|바꿔줘|가져갈게|할래|할게|하면\s*될\s*것\s*같아|하면\s*좋을\s*것\s*같아)[!.。…\s]*$/g,
+      "",
+    )
+    .trim();
 }
 
 function mapProfileToData(profile: ElasticProfile): OnboardingData {

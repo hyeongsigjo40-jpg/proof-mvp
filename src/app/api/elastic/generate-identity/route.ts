@@ -1,8 +1,13 @@
 import OpenAI from "openai";
 import { NextResponse } from "next/server";
+import { buildProofSystemPrompt } from "@/lib/proof-ai-context";
 
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 const model = process.env.OPENAI_MODEL || "gpt-5.4-mini";
+const identityStepContext =
+  "현재 호출은 identity_statement_generation이다. 이 단계의 목적은 사용자의 목표와 바꾸고 싶은 이유를 daily action으로 이어질 수 있는 행동 정체성 문장으로 압축하는 것이다.\n" +
+  "allowed_actions: generate_identity_statement.\n" +
+  "forbidden_actions: advice, diagnosis, personality_judgment, multiple_options.";
 
 export async function POST(request: Request) {
   const { life_area, why_change, vision_text } = (await request.json()) as {
@@ -29,7 +34,8 @@ export async function POST(request: Request) {
       {
         role: "system",
         content:
-          "너는 사용자의 목표와 비전을 바탕으로 정체성 문장을 한 문장으로 만든다. '나는 [과거 패턴/결핍]이 아니라, [새로운 행동 정체성]인 사람이다.' 구조를 따른다. 구체적이고 행동 중심적으로 쓴다. 평가나 조언 없이 문장 하나만 반환한다. 한국어로 쓴다.",
+          buildProofSystemPrompt("정체성 문장 생성기", identityStepContext) +
+          "\n\n너는 사용자의 목표와 비전을 바탕으로 정체성 문장을 한 문장으로 만든다. '나는 [과거 패턴/결핍]이 아니라, [새로운 행동 정체성]인 사람이다.' 구조를 따른다. 구체적이고 행동 중심적으로 쓴다. 평가나 조언 없이 문장 하나만 반환한다. 한국어로 쓴다.",
       },
       {
         role: "user",

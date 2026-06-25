@@ -693,12 +693,15 @@ blockquote {
 }
 
 .tracker-workspace {
+  align-items: stretch;
   display: grid;
   gap: 18px;
   grid-template-columns: minmax(0, 1fr) minmax(340px, 520px);
+  height: calc(100dvh - 64px);
   margin: 0 auto;
   max-width: none;
-  min-height: calc(100dvh - 64px);
+  min-height: 0;
+  overflow: hidden;
   padding: 16px 24px 28px;
   width: 100%;
 }
@@ -716,7 +719,9 @@ blockquote {
   display: grid;
   gap: 18px;
   grid-template-rows: auto auto auto auto auto auto 1fr;
+  height: 100%;
   min-height: 0;
+  overflow: auto;
   padding: 22px;
 }
 
@@ -1161,15 +1166,18 @@ blockquote {
 }
 
 .goal-panel {
+  align-content: start;
   background: rgba(255, 255, 255, 0.88);
   border: 1px solid var(--line);
   border-radius: 8px;
   box-shadow: var(--shadow);
   display: grid;
   gap: 28px;
+  height: 100%;
   min-width: 0;
+  min-height: 0;
+  overflow: auto;
   padding: 32px 28px;
-  align-content: start;
 }
 
 .goal-panel-header {
@@ -1872,7 +1880,14 @@ blockquote {
   .tracker-workspace {
     grid-template-columns: 1fr;
     height: auto;
+    overflow: visible;
     padding-inline: 16px;
+  }
+
+  .goal-panel,
+  .tracker-panel {
+    height: auto;
+    overflow: visible;
   }
 
   .chat-panel {
