@@ -60,6 +60,14 @@ type CorrectionRouterResult = {
   reason: string;
 };
 
+type HabitActionReviewResult = {
+  decision: "save" | "revise_step" | "ask_clarifying_question";
+  habit_action: string | null;
+  missing_dimensions: ("concrete" | "measurable" | "controllable" | "repeatable")[];
+  reply: string;
+  reason: string;
+};
+
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 const model = process.env.OPENAI_MODEL || "gpt-5.4-mini";
 
@@ -133,8 +141,16 @@ export async function POST(request: Request) {
           buildProofSystemPrompt("온보딩 진행자", onboardingStepContext) +
           "\n\n[step_flow]\n" +
           "[목표 파트: goal_area→goal_why→goal_identity]\n자연스러운 대화로 진행. goal_identity에서 '나는 [이전 패턴]이 아니라, [새 행동 정체성]인 사람이다.' 형태 문장을 goalIdentityStatement에 저장.\n\n" +
-          "[패턴 파트: failure_situation→failure_feeling→bridge]\n- failure_situation: 최근에 목표를 향해 가다가 흐트러졌던 구체적인 상황을 파악한다. 판단 없이 failureSituation에 저장한다.\n- failure_feeling: 그때 든 생각이나 감정을 파악한다. failureFeeling에 저장 후 next_step=bridge.\n- bridge: 사용자의 실패 상황과 감정을 직접 언급하며, 이것이 의지력 문제가 아니라 목표가 상황에 맞게 유연하지 않아서임을 설명한다. 그래서 Proof가 SMART 목표와 Elastic Habit 방식을 쓰는 이유를 2-3문장으로 설명한다. should_advance=true, next_step=bridge, data_patch=[].\n\n" +
+          "[패턴 파트: failure_situation→failure_feeling→bridge]\n- failure_situation: 최근에 목표를 향해 가다가 흐트러졌던 구체적인 상황을 파악한다. 판단 없이 failureSituation에 저장한다.\n- failure_feeling: 그때 든 생각이나 감정을 파악한다. failureFeeling에 저장 후 next_step=bridge.\n- bridge: 사용자의 실패 상황과 감정을 직접 언급하며, 이것이 의지력 문제가 아니라 목표가 상황에 맞게 유연하지 않아서임을 설명한다. 이어서 이제 목표를 '오늘이나 내일부터 바로 할 수 있고, 직접 통제할 수 있고, 완료 여부를 확인할 수 있는 행동'으로 바꿀 것이라고 안내한다. should_advance=true, next_step=bridge, data_patch=[].\n\n" +
           "[습관 목표 파트: habit_action→habit_period→habit_frequency→habit_when→habit_amount]\nSMART 습관 문장을 한 필드씩 채워나간다.\n- habit_action: 구체적인 행동\n- habit_period: 며칠/몇 주\n- habit_frequency: 주 몇 회 또는 매일\n- habit_when: 언제/어떤 상황\n- habit_amount: 얼마나\n\n" +
+          "[habit_action 품질 기준]\n" +
+          "- habit_action은 사용자가 오늘/내일 바로 실행할 수 있고, 직접 통제할 수 있고, 구체적이고, 측정 가능한 루틴 행동이어야 한다.\n" +
+          "- 측정 가능하다는 뜻: 완료 여부를 사용자가 yes/no로 판단할 수 있거나, 횟수/시간/분량/대상 수 같은 단위가 들어 있다.\n" +
+          "- 구체적이라는 뜻: 무엇을 대상으로 어떤 행동을 하는지가 드러난다. 예: '연애 노력하기'가 아니라 '대화 소재 1개 적기'.\n" +
+          "- 외부 사건이 있어야 가능한 행동은 저장하지 않는다. 예: '소개팅이나 매칭 직후 연락하기'는 사용자가 매일 만들 수 없는 조건이므로 부적합하다.\n" +
+          "- 사용자가 '작지 않다', '추상적이다', '루틴적으로 할 수 있어야 한다', '추천해줘', '행동 말이야'라고 말하면 그것을 habitAction 값으로 저장하지 않는다.\n" +
+          "- 기준을 통과하지 못하면 should_advance=false, data_patch=[]로 두고, 부족한 차원 하나만 좁히는 질문 또는 현재 영역에 맞는 구체 후보 2-3개를 제안한다.\n" +
+          "- 연애 영역 예시: '매일 저녁 10분 연락 후보 1명 정리하기', '대화 소재 1개 적기', '소개팅 앱 프로필 한 줄 개선하기'.\n\n" +
           "[goal_complete] 버튼으로 처리, 직접 호출하지 않는다.\n\n" +
           "[mini→plus→elite 수정 규칙]\n사용자가 이전 레벨을 수정하려 하면 해당 필드에 저장하고 next_step을 그 레벨로 되돌린다.",
       },
@@ -197,7 +213,9 @@ export async function POST(request: Request) {
     },
   });
 
-  return NextResponse.json(JSON.parse(response.output_text) as OnboardingControllerResponse);
+  return NextResponse.json(
+    await normalizeControllerResponse(openai, body, JSON.parse(response.output_text) as OnboardingControllerResponse),
+  );
 }
 
 async function routeCorrection(
@@ -256,13 +274,14 @@ async function routeCorrection(
     },
   });
 
-  return correctionFromRouter(body, JSON.parse(response.output_text) as CorrectionRouterResult);
+  return correctionFromRouter(client, body, JSON.parse(response.output_text) as CorrectionRouterResult);
 }
 
-function correctionFromRouter(
+async function correctionFromRouter(
+  client: OpenAI,
   body: OnboardingControllerRequest,
   routed: CorrectionRouterResult,
-): OnboardingControllerResponse | null {
+): Promise<OnboardingControllerResponse | null> {
   if (routed.intent !== "correct_previous_field") return null;
   if (!routed.target_field || !routed.value?.trim()) return null;
   if (routed.confidence < 0.72) return null;
@@ -270,6 +289,19 @@ function correctionFromRouter(
   if (!isPreviousField(routed.target_field, body.current_step)) return null;
 
   const value = routed.value.trim();
+  if (routed.target_field === "habitAction") {
+    const review = await reviewHabitAction(client, body, value);
+    if (review.decision !== "save") {
+      return {
+        intent: "correction",
+        should_advance: true,
+        next_step: "habit_action",
+        data_patch: [],
+        reply: review.reply,
+      };
+    }
+  }
+
   const nextData = { ...body.data, [routed.target_field]: value };
   return {
     intent: "correction",
@@ -333,7 +365,7 @@ function currentQuestion(step: OnboardingStep, data: OnboardingData) {
     case "failure_feeling":
       return "그때 어떤 생각이나 감정이 들었어요?";
     case "habit_action":
-      return "어떤 행동을 습관으로 만들고 싶으세요?";
+      return "이제 목표를 실제 행동으로 바꿔볼게요. 오늘이나 내일부터 바로 할 수 있고, 내가 통제할 수 있고, 완료 여부를 확인할 수 있는 행동이어야 해요. 어떤 행동으로 시작해볼까요?";
     case "habit_period":
       return "며칠 동안 실험해볼까요? 7일, 14일, 28일 중 선택해주세요.";
     case "habit_frequency":
@@ -371,9 +403,9 @@ function stepGoal(step: OnboardingStep): string {
     case "failure_feeling":
       return "그때 어떤 생각이나 감정이 들었는지 파악한다. failureFeeling에 저장 후 next_step=bridge로 advance.";
     case "bridge":
-      return "사용자의 failureSituation과 failureFeeling을 직접 언급하며 공감한다. 이것이 의지력 문제가 아니라 목표가 상황에 맞게 유연하지 않아서임을 설명한다. 그래서 Proof가 SMART 목표로 행동을 구체화하고, Elastic Habit으로 망한 날에도 Mini 하나면 성공인 유연한 기준을 만든다고 설명한다. 마지막에 '이제 같이 만들어볼까요?'로 마무리. should_advance=true, next_step=bridge, data_patch=[].";
+      return "사용자의 failureSituation과 failureFeeling을 직접 언급하며 공감한다. 이것이 의지력 문제가 아니라 목표가 상황에 맞게 유연하지 않아서임을 설명한다. 이어서 Proof가 목표를 지금 당장 가능한, 측정 가능하고, 통제 가능한 습관 행동으로 전환한다고 안내한다. 마지막에 '이제 같이 만들어볼까요?'로 마무리. should_advance=true, next_step=bridge, data_patch=[].";
     case "habit_action":
-      return "구체적인 행동을 habitAction에 저장. 막연하면 예시 들어 도와준다. 답변 오면 advance.";
+      return "구체적이고 사용자가 직접 통제할 수 있는 루틴 행동을 habitAction에 저장한다. 외부 사건이 있어야만 가능한 행동, 추상적인 방향, 메타 피드백, 추천 요청은 저장하지 않는다. 막연하면 2-3개의 구체 후보를 제안하고 should_advance=false.";
     case "habit_period":
       return "며칠/몇 주 동안 실험할지 habitPeriod에 저장. 7일/14일/28일 중 권장.";
     case "habit_frequency":
@@ -393,6 +425,99 @@ function stepGoal(step: OnboardingStep): string {
   }
 }
 
+async function normalizeControllerResponse(
+  client: OpenAI,
+  body: OnboardingControllerRequest,
+  result: OnboardingControllerResponse,
+): Promise<OnboardingControllerResponse> {
+  if (body.current_step !== "habit_action") return result;
+
+  const habitActionPatch = result.data_patch.find((patch) => patch.field === "habitAction");
+  const proposed = habitActionPatch?.value.trim() ?? "";
+
+  if (!habitActionPatch) return result;
+  const review = await reviewHabitAction(client, body, proposed);
+  if (review.decision !== "save") {
+    return stay(
+      "habit_action",
+      {},
+      review.reply,
+    );
+  }
+
+  return {
+    ...result,
+    data_patch: result.data_patch.map((patch) =>
+      patch.field === "habitAction" && review.habit_action ? { ...patch, value: review.habit_action } : patch,
+    ),
+  };
+}
+
+async function reviewHabitAction(
+  client: OpenAI,
+  body: OnboardingControllerRequest,
+  proposedHabitAction: string,
+): Promise<HabitActionReviewResult> {
+  const response = await client.responses.create({
+    model,
+    input: [
+      {
+        role: "system",
+        content:
+          buildProofSystemPrompt(
+            "습관 행동 품질 검토자",
+            "현재 호출은 habit_action_quality_gate다. 목적은 온보딩 컨트롤러가 만든 habitAction 후보가 실제로 저장 가능한 습관 행동인지 검토하는 것이다.",
+          ) +
+          "\n\n[quality_criteria]\n" +
+          "- 저장 가능한 habit_action은 사용자가 직접 통제할 수 있어야 한다.\n" +
+          "- 오늘이나 내일부터 반복 가능한 루틴 행동이어야 한다.\n" +
+          "- 구체적이어야 한다. 대상과 행동이 보여야 한다.\n" +
+          "- 측정 가능해야 한다. 완료 여부가 yes/no로 판단되거나 횟수, 시간, 분량, 대상 수 같은 단위가 있어야 한다.\n" +
+          "- 너무 추상적인 의도, 목표 영역, 감정, 메타 피드백, 질문, 불만, 재설계 요청은 habit_action으로 저장하지 않는다.\n" +
+          "- 외부 사건이 발생해야만 가능한 행동은 루틴 행동으로 저장하지 않는다.\n" +
+          "- 부적합하면 decision='revise_step', habit_action=null, missing_dimensions에 부족한 기준을 넣고, reply에서 왜 저장하지 않는지 짧게 인정한 뒤 현재 목표 영역에 맞는 구체 후보 2-3개를 제안한다.\n" +
+          "- 애매하면 decision='ask_clarifying_question'으로 부족한 기준 하나만 묻는다.\n" +
+          "- 같은 턴에서 여러 질문을 하지 않는다.\n" +
+          "- 적합하면 decision='save'이고, habit_action에는 군더더기를 제거한 실행 행동만 넣는다.",
+      },
+      {
+        role: "user",
+        content: JSON.stringify({
+          current_step: body.current_step,
+          latest_user_answer: body.latest_user_answer,
+          proposed_habit_action: proposedHabitAction,
+          existing_profile: body.data,
+          review_question:
+            "이 proposed_habit_action을 habitAction 필드에 저장해도 되는가? 아니면 사용자가 행동 단계를 다시 설계하자는 문맥인가?",
+        }),
+      },
+    ],
+    text: {
+      format: {
+        type: "json_schema",
+        name: "habit_action_review",
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          required: ["decision", "habit_action", "missing_dimensions", "reply", "reason"],
+          properties: {
+            decision: { type: "string", enum: ["save", "revise_step", "ask_clarifying_question"] },
+            habit_action: { type: ["string", "null"] },
+            missing_dimensions: {
+              type: "array",
+              items: { type: "string", enum: ["concrete", "measurable", "controllable", "repeatable"] },
+            },
+            reply: { type: "string" },
+            reason: { type: "string" },
+          },
+        },
+      },
+    },
+  });
+
+  return JSON.parse(response.output_text) as HabitActionReviewResult;
+}
+
 function fallbackTurn(body: OnboardingControllerRequest): OnboardingControllerResponse {
   const text = body.latest_user_answer?.trim() ?? "";
   switch (body.current_step) {
@@ -408,7 +533,7 @@ function fallbackTurn(body: OnboardingControllerRequest): OnboardingControllerRe
       return advance("failure_situation", { failureSituation: text }, "그때 어떤 생각이나 감정이 들었어요?");
     case "failure_feeling": {
       const situation = body.data.failureSituation || "그 상황";
-      return advance("failure_feeling", { failureFeeling: text }, `${situation}에서 ${text}했던 거잖아요. 이건 의지력 문제가 아니라, 목표가 그날의 상황에 맞게 유연하지 않아서예요.\n\n그래서 Proof는 SMART 목표로 행동을 구체화하고, Elastic Habit으로 망한 날에도 Mini 하나면 성공인 기준을 만들어요. 이제 같이 만들어볼까요?`);
+      return advance("failure_feeling", { failureFeeling: text }, `${situation}에서 ${text}했던 거잖아요. 이건 의지력 문제가 아니라, 목표가 그날의 상황에 맞게 유연하지 않아서예요.\n\n이제 이 목표를 오늘이나 내일부터 바로 할 수 있고, 내가 통제할 수 있고, 완료 여부를 확인할 수 있는 행동으로 바꿔볼게요. 그래야 막혔을 때 나를 탓하는 대신, 행동의 크기나 조건을 조정할 수 있습니다. 이제 같이 만들어볼까요?`);
     }
     case "bridge":
       return { intent: "continue", should_advance: true, next_step: "bridge", data_patch: [], reply: "" };
@@ -421,13 +546,13 @@ function fallbackTurn(body: OnboardingControllerRequest): OnboardingControllerRe
     case "habit_when":
       return advance("habit_when", { habitWhen: text }, "한 번에 얼마나 할 건가요? 예: 10분, 3km, 1세트");
     case "habit_amount":
-      return advance("habit_amount", { habitAmount: text }, "좋아요, 습관 목표가 완성됐어요. 아래 버튼을 눌러 Elastic Habit 단계를 설정해요.");
+      return advance("habit_amount", { habitAmount: text }, "좋아요, 습관 목표가 완성됐어요. 다음은 이 행동을 Mini / Plus / Elite로 나눠서, 컨디션이 낮은 날에도 완전히 실패한 날이 되지 않게 만들 거예요.");
     case "mini":
       return advance("mini", { miniTask: text }, "Plus는 보통 날의 기본 성공 단위예요. 어떻게 할까요?");
     case "plus":
       return advance("plus", { plusTask: text }, "Elite는 여유 있는 날 도전하는 단위예요. 어떻게 할까요?");
     case "elite":
-      return advance("elite", { eliteTask: text }, "완성됐어요. 이제 매일 체크인을 시작해볼게요.");
+      return advance("elite", { eliteTask: text }, "완성됐어요. 이제부터 체크인은 평가가 아니라 관찰이에요. 어떤 조건에서 움직였고 어디서 막혔는지를 기록하면서 내일의 설계를 더 맞춰볼게요.");
     default:
       return stay(body.current_step, {}, "조금 더 구체적으로 말씀해주세요.");
   }

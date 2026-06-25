@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
-import { AppNav } from "@/components/AppNav";
+import { Suspense } from "react";
+import { AppNav, BrandLink } from "@/components/AppNav";
 import { copy } from "@/lib/copy";
 import "./globals.css";
 
@@ -18,12 +19,16 @@ export default function RootLayout({
       <body>
         <div className="app-frame">
           <header className="top-bar">
-            <a className="brand" href="/">
-              {copy.appName}
-            </a>
+            <Suspense fallback={<a className="brand" href="/">{copy.appName}</a>}>
+              <BrandLink className="brand">
+                {copy.appName}
+              </BrandLink>
+            </Suspense>
           </header>
           {children}
-          <AppNav />
+          <Suspense fallback={null}>
+            <AppNav />
+          </Suspense>
         </div>
       </body>
     </html>

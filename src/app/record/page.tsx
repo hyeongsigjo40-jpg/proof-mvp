@@ -39,6 +39,7 @@ function RecordNotebook() {
   const searchParams = useSearchParams();
   const selectedDate = searchParams.get("date");
   const scope = searchParams.get("scope") || LIVE_ELASTIC_SCOPE;
+  const trackerHref = scope === LIVE_ELASTIC_SCOPE ? "/" : `/?debug=1&scope=${encodeURIComponent(scope)}`;
   const [checkIns, setCheckIns] = useState<ElasticCheckIn[]>([]);
   const [recordError, setRecordError] = useState<string | null>(null);
 
@@ -68,6 +69,7 @@ function RecordNotebook() {
     [selectedDate, sortedCheckIns],
   );
   const selectedMemo = useMemo(() => parseCheckInMemo(selectedCheckIn?.memo ?? null), [selectedCheckIn]);
+  const scorecard = useMemo(() => createRecordScorecard(checkIns), [checkIns]);
 
   if (loading) return <LoadingState />;
 
@@ -79,7 +81,7 @@ function RecordNotebook() {
           <h1>습관 기록장</h1>
           <p>날짜별로 남긴 선택, 패턴, Proof 응답을 메모처럼 다시 봅니다.</p>
         </div>
-        <Link className="secondary-action" href="/">
+        <Link className="secondary-action" href={trackerHref}>
           <ArrowLeft size={17} aria-hidden="true" />
           트래커로
         </Link>
@@ -90,61 +92,103 @@ function RecordNotebook() {
       {sortedCheckIns.length === 0 ? (
         <section className="empty-state">
           <p>아직 저장된 습관 기록이 없습니다.</p>
-          <Link className="primary-button wide-button" href="/">
+          <Link className="primary-button wide-button" href={trackerHref}>
             오늘 체크인으로 가기
           </Link>
         </section>
       ) : (
-        <section className="record-notebook">
-          <aside className="record-date-list" aria-label="날짜별 습관 기록">
-            {sortedCheckIns.map((checkIn) => (
-              <Link
-                className={checkIn.checkin_date === selectedCheckIn?.checkin_date ? "record-date-row active" : "record-date-row"}
-                href={`/record?date=${checkIn.checkin_date}&scope=${encodeURIComponent(scope)}`}
-                key={checkIn.id}
-              >
-                <span>{formatDate(checkIn.checkin_date)}</span>
-                <strong className={`status-chip ${checkIn.result}`}>{statusLabels[checkIn.result]}</strong>
-              </Link>
-            ))}
-          </aside>
-
-          {selectedCheckIn ? (
-            <article className="record-note">
-              <header className="record-note-header">
-                <div>
-                  <p className="eyebrow">Daily Note</p>
-                  <h2>{formatDate(selectedCheckIn.checkin_date)}</h2>
+        <>
+          <section className="elastic-scorecard record-scorecard" aria-label="월간 스코어카드">
+            <div className="scorecard-title">Scorecard</div>
+            <div className="scorecard-columns">
+              <section>
+                <span>Counts</span>
+                <div className="score-counts">
+                  <strong className="mini-count">Mini {scorecard.mini}</strong>
+                  <strong className="plus-count">Plus {scorecard.plus}</strong>
+                  <strong className="elite-count">Elite {scorecard.elite}</strong>
                 </div>
-                <span className={`status-chip ${selectedCheckIn.result}`}>{statusLabels[selectedCheckIn.result]}</span>
-              </header>
+              </section>
+              <section>
+                <span>Base Scores</span>
+                <p>
+                  {scorecard.mini} + ({scorecard.plus} x 2) + ({scorecard.elite} x 3) = <strong>{scorecard.baseScore}</strong>
+                </p>
+              </section>
+              <section>
+                <span>Bonuses</span>
+                {scorecard.bonuses.length ? (
+                  <ul>
+                    {scorecard.bonuses.map((item) => (
+                      <li key={item.label}>
+                        {item.label} +{item.points}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p>아직 없음</p>
+                )}
+              </section>
+              <section>
+                <span>Total Score</span>
+                <p>
+                  {scorecard.baseScore} + {scorecard.bonusScore} = <strong>{scorecard.totalScore}</strong>
+                </p>
+              </section>
+            </div>
+          </section>
 
-              {selectedMemo.patterns.length ? (
-                <div className="record-note-body">
-                  {selectedMemo.patterns.map((pattern, index) => (
-                    <section className="record-note-block" key={`${pattern.user}-${index}`}>
-                      <div className="record-note-label">
-                        <BookOpen size={16} aria-hidden="true" />
-                        <span>오늘의 패턴</span>
-                      </div>
-                      <p>{pattern.user}</p>
-                      {pattern.assistant ? (
-                        <>
-                          <div className="record-note-label proof">
-                            <span>Proof 응답</span>
-                          </div>
-                          <p>{pattern.assistant}</p>
-                        </>
-                      ) : null}
-                    </section>
-                  ))}
-                </div>
-              ) : (
-                <p className="record-note-empty">{selectedMemo.fallback || "이 날짜에는 세부 메모가 없습니다."}</p>
-              )}
-            </article>
-          ) : null}
-        </section>
+          <section className="record-notebook">
+            <aside className="record-date-list" aria-label="날짜별 습관 기록">
+              {sortedCheckIns.map((checkIn) => (
+                <Link
+                  className={checkIn.checkin_date === selectedCheckIn?.checkin_date ? "record-date-row active" : "record-date-row"}
+                  href={`/record?date=${checkIn.checkin_date}&scope=${encodeURIComponent(scope)}`}
+                  key={checkIn.id}
+                >
+                  <span>{formatDate(checkIn.checkin_date)}</span>
+                  <strong className={`status-chip ${checkIn.result}`}>{statusLabels[checkIn.result]}</strong>
+                </Link>
+              ))}
+            </aside>
+
+            {selectedCheckIn ? (
+              <article className="record-note">
+                <header className="record-note-header">
+                  <div>
+                    <p className="eyebrow">Daily Note</p>
+                    <h2>{formatDate(selectedCheckIn.checkin_date)}</h2>
+                  </div>
+                  <span className={`status-chip ${selectedCheckIn.result}`}>{statusLabels[selectedCheckIn.result]}</span>
+                </header>
+
+                {selectedMemo.patterns.length ? (
+                  <div className="record-note-body">
+                    {selectedMemo.patterns.map((pattern, index) => (
+                      <section className="record-note-block" key={`${pattern.user}-${index}`}>
+                        <div className="record-note-label">
+                          <BookOpen size={16} aria-hidden="true" />
+                          <span>오늘의 패턴</span>
+                        </div>
+                        <p>{pattern.user}</p>
+                        {pattern.assistant ? (
+                          <>
+                            <div className="record-note-label proof">
+                              <span>Proof 응답</span>
+                            </div>
+                            <p>{pattern.assistant}</p>
+                          </>
+                        ) : null}
+                      </section>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="record-note-empty">{selectedMemo.fallback || "이 날짜에는 세부 메모가 없습니다."}</p>
+                )}
+              </article>
+            ) : null}
+          </section>
+        </>
       )}
     </main>
   );
@@ -174,4 +218,35 @@ function parseCheckInMemo(memo: string | null): ParsedMemo {
     fallback: lines.filter((line) => !line.startsWith("[오늘의 선택]")).join("\n"),
     patterns,
   };
+}
+
+function createRecordScorecard(checkIns: ElasticCheckIn[]) {
+  const mini = checkIns.filter((checkIn) => checkIn.result === "mini").length;
+  const plus = checkIns.filter((checkIn) => checkIn.result === "plus").length;
+  const elite = checkIns.filter((checkIn) => checkIn.result === "elite").length;
+  const notDone = checkIns.filter((checkIn) => checkIn.result === "not_done").length;
+  const noResponse = checkIns.filter((checkIn) => checkIn.result === "no_response").length;
+  const baseScore = mini + plus * 2 + elite * 3;
+  const bonuses = getRecordBonusItems({ mini, plus, elite, notDone, noResponse });
+  const bonusScore = bonuses.reduce((sum, item) => sum + item.points, 0);
+
+  return {
+    mini,
+    plus,
+    elite,
+    baseScore,
+    bonuses,
+    bonusScore,
+    totalScore: baseScore + bonusScore,
+  };
+}
+
+function getRecordBonusItems(levelCounts: { mini: number; plus: number; elite: number; notDone: number; noResponse: number }) {
+  const bonuses: { label: string; points: number }[] = [];
+  if (levelCounts.elite >= 10) bonuses.push({ label: "Elite 10회 이상", points: 3 });
+  if (levelCounts.elite >= 15) bonuses.push({ label: "Elite 15회 이상", points: 3 });
+  if (levelCounts.notDone === 0 && levelCounts.noResponse === 0 && levelCounts.mini + levelCounts.plus + levelCounts.elite >= 30) {
+    bonuses.push({ label: "30일 모두 기록", points: 20 });
+  }
+  return bonuses;
 }

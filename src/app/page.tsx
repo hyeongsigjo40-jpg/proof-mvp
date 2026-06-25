@@ -2,7 +2,7 @@
 
 import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowUp, CalendarCheck, Check, Circle, Flame, MessageCircle, Minus, PencilLine, Target } from "lucide-react";
+import { ArrowUp, CalendarCheck, Check, Circle, MessageCircle, Minus, PencilLine, Target } from "lucide-react";
 import { AuthPanel } from "@/components/AuthPanel";
 import { LoadingState } from "@/components/LoadingState";
 import { todayKey } from "@/lib/date";
@@ -135,8 +135,10 @@ const emptyGoalData: GoalData = { lifeArea: "", whyChange: "", identityStatement
 
 const GOAL_AREA_QUESTION =
   "요즘 가장 바꾸고 싶은 삶의 영역은 무엇인가요?\n공부, 운동, 수면, 일, 감정관리, 인간관계 중 어디에 가까운지 자유롭게 말해주세요.";
+const HABIT_ACTION_OPENING =
+  "이제 목표를 실제 행동으로 바꿔볼게요.\n여기서 정하는 습관은 좋은 다짐이 아니라, 오늘이나 내일부터 바로 할 수 있고, 내가 통제할 수 있고, 완료 여부를 확인할 수 있는 행동이어야 해요.\n그래야 나중에 막혔을 때 나를 탓하는 대신, 행동의 크기나 조건을 조정할 수 있습니다.\n\n어떤 행동으로 시작해볼까요?";
 const DAILY_CHECKIN_PROMPT =
-  "오늘의 습관은 어떤 흐름이었나요?\n오늘의 패턴을 남겨볼게요. 실행 여부보다, 어떤 조건에서 움직였고 어디서 막혔는지가 더 중요해요.";
+  "오늘의 습관은 어떤 흐름이었나요?\n이 체크인은 평가가 아니라 관찰이에요. 잘 됐다면 어떤 조건이 도와줬는지, 안 됐다면 어디서 막혔는지를 남겨볼게요. 기록 자체가 내일의 설계를 더 똑똑하게 만드는 데이터가 됩니다.";
 
 const selfNarrativeKeywords = ["의지", "한심", "원래 그런", "이상해", "못하는 사람", "의지력"];
 
@@ -156,7 +158,7 @@ const elasticLevelLabels: Record<ElasticLevel, string> = {
 };
 
 const MINI_OPENING = (habitAction: string) =>
-  `습관 목표가 완성됐어요. 이제 Elastic Habit의 세 단계를 설정할게요.\n\nMini는 피곤하거나 바쁜 날에도 할 수 있는 가장 작은 행동이에요. "${habitAction}"을 기준으로 Mini는 어떻게 설정할까요?\n예: 1문제만 풀기, 5분만 켜놓기`;
+  `좋아요. 이제 "${habitAction}"을 Mini / Plus / Elite로 나눌게요.\n목표는 매일 완벽하게 해내는 게 아니라, 컨디션이 낮은 날에도 완전히 실패한 날이 되지 않게 만드는 거예요.\n\nMini는 가장 힘든 날에도 남길 수 있는 최소 증거입니다. 너무 쉬워 보여도 괜찮아요. "${habitAction}"을 기준으로 Mini는 어떻게 설정할까요?`;
 
 const initialMessages: Message[] = [];
 const DEBUG_SESSION_KEY = "proof-elastic-debug-session";
@@ -167,6 +169,14 @@ function createDebugSessionId() {
 
 function readDebugSessionId() {
   if (typeof window === "undefined") return "";
+  const scope = new URLSearchParams(window.location.search).get("scope");
+  if (scope?.startsWith("debug:")) {
+    const sessionId = scope.slice("debug:".length);
+    if (sessionId) {
+      window.localStorage.setItem(DEBUG_SESSION_KEY, sessionId);
+      return sessionId;
+    }
+  }
   const current = window.localStorage.getItem(DEBUG_SESSION_KEY);
   if (current) return current;
   const next = createDebugSessionId();
@@ -199,7 +209,6 @@ export default function Home() {
   const [nextMini, setNextMini] = useState("");
   const [nextPlus, setNextPlus] = useState("");
   const [nextElite, setNextElite] = useState("");
-  const [miniFailureCount, setMiniFailureCount] = useState(0);
   const [pending, setPending] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [debugEnabled] = useState(
@@ -230,12 +239,6 @@ export default function Home() {
         setNextElite(nextData.eliteTask);
         setMode("daily");
         setStep("complete");
-        setMessages([
-          {
-            role: "assistant",
-            text: DAILY_CHECKIN_PROMPT,
-          },
-        ]);
       } else {
         resetOnboardingState();
         assistant(GOAL_AREA_QUESTION);
@@ -243,16 +246,17 @@ export default function Home() {
 
       setCheckIns(checkIns);
       setRecords(createMonthRecords(checkIns));
-      setMiniFailureCount(countRecentMiniFailures(checkIns));
       const today = checkIns.find((checkIn) => checkIn.checkin_date === activeCheckInDate);
       if (today) {
         setSelectedCheckIn(today.result);
         setMemo(today.memo ?? "");
+        setDailyPatternTurns(parsePatternMemo(today.memo).turns);
         setDailyStage("done");
         setMessages([
+          ...buildDailyConversationMessages(checkIns, activeCheckInDate),
           {
             role: "assistant",
-            text: `오늘 기록은 이미 ${statusMeta[today.result].label}로 저장되어 있어요.\n필요하면 아래에서 오늘 기록을 수정할 수 있습니다.`,
+            text: `${formatDateLabel(activeCheckInDate)} 기록은 이미 ${statusMeta[today.result].label}로 저장되어 있어요.\n필요하면 아래에서 오늘 기록을 수정할 수 있습니다.`,
           },
         ]);
       } else if (profile?.onboarding_completed_at) {
@@ -261,7 +265,13 @@ export default function Home() {
         setDailyPatternTurns([]);
         setPatternInput("");
         setDailyStage("checkin");
-        setMessages([{ role: "assistant", text: DAILY_CHECKIN_PROMPT }]);
+        setMessages([
+          ...buildDailyConversationMessages(checkIns, activeCheckInDate),
+          {
+            role: "assistant",
+            text: `${formatDateLabel(activeCheckInDate)} 체크인을 시작할게요.\n${DAILY_CHECKIN_PROMPT}`,
+          },
+        ]);
       }
     }
 
@@ -288,11 +298,6 @@ export default function Home() {
     [records],
   );
   const completedCount = levelCounts.plus + levelCounts.elite;
-  const partialCount = levelCounts.mini;
-  const baseScore = levelCounts.mini + levelCounts.plus * 2 + levelCounts.elite * 3;
-  const bonusItems = getBonusItems(levelCounts);
-  const bonusScore = bonusItems.reduce((sum, item) => sum + item.points, 0);
-  const totalScore = baseScore + bonusScore;
 
   async function handleTextSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -343,7 +348,7 @@ export default function Home() {
   async function handleContinueButton() {
     if (step === "bridge") {
       setStep("habit_action");
-      assistant("어떤 행동을 습관으로 만들고 싶으세요? 구체적일수록 좋아요.\n예: 토익 LC 10분 듣기, 저녁 러닝 3km");
+      assistant(HABIT_ACTION_OPENING);
     }
     if (step === "goal_complete") {
       setStep("mini");
@@ -395,6 +400,8 @@ export default function Home() {
     const trimmed = text.trim();
     if (!userId || !trimmed) return;
 
+    setMessages((current) => [...current, { role: "user", text: `${statusMeta[status].label}\n${trimmed}` }]);
+    setPatternInput("");
     setPending(true);
     try {
       const coachReply = createPatternCoachReply(status, trimmed, 0);
@@ -414,16 +421,13 @@ export default function Home() {
       setCheckIns(nextCheckIns);
       setMessages((current) => [
         ...current,
-        { role: "user", text: `${statusMeta[status].label}\n${trimmed}` },
         ...(hasSelfNarrative
           ? [{ role: "assistant" as const, text: "기억하시죠, 오늘은 그 사람인지가 아니라 이 행동을 했는지만 보기로 했었죠" }]
           : []),
         { role: "assistant", text: `${coachReply}\n\n내일도 습관 목표를 그대로 가져갈까요? 필요하면 오늘 패턴에 맞게 목표를 수정해도 돼요.` },
       ]);
-      setMiniFailureCount((current) => (status === "not_done" ? current + 1 : 0));
       setMemo(patternMemo);
       setDailyPatternTurns(patternTurns);
-      setPatternInput("");
       setDailyStage("tomorrow_confirm");
       setSaveMessage(null);
     } finally {
@@ -472,6 +476,8 @@ export default function Home() {
     const trimmed = text.trim();
     if (!userId || !trimmed || !selectedCheckIn || selectedCheckIn === "open" || selectedCheckIn === "no_response") return;
 
+    setMessages((current) => [...current, { role: "user", text: trimmed }]);
+    setPatternInput("");
     setPending(true);
     try {
       const followupReply = createPatternFollowupReply(trimmed);
@@ -491,10 +497,8 @@ export default function Home() {
       setDailyPatternTurns(nextTurns);
       setMessages((current) => [
         ...current,
-        { role: "user", text: trimmed },
         { role: "assistant", text: `${followupReply}\n\n내일도 습관 목표를 그대로 가져갈까요? 필요하면 목표를 수정해도 돼요.` },
       ]);
-      setPatternInput("");
       setDailyStage("tomorrow_confirm");
     } finally {
       setPending(false);
@@ -505,6 +509,8 @@ export default function Home() {
     const trimmed = text.trim();
     if (!trimmed) return;
 
+    setMessages((current) => [...current, { role: "user", text: trimmed }]);
+    setPatternInput("");
     setPending(true);
     try {
       const result = await runHabitTaskPatchController(trimmed, data, checkIns);
@@ -513,10 +519,8 @@ export default function Home() {
       setPendingTaskPatch(hasPatch ? patch : null);
       setMessages((current) => [
         ...current,
-        { role: "user", text: trimmed },
         { role: "assistant", text: result.reply },
       ]);
-      setPatternInput("");
       setDailyStage(
         result.next_step === "confirm_patch" && hasPatch
           ? "goal_patch_confirm"
@@ -673,7 +677,6 @@ export default function Home() {
     setNextMini("");
     setNextPlus("");
     setNextElite("");
-    setMiniFailureCount(0);
     setSaveMessage(null);
   }
 
@@ -843,95 +846,39 @@ export default function Home() {
           </section>
         )}
 
-        <div className="elastic-grid">
-          <section className="tracker-tile level-mini">
-            <span>Mini</span>
-            <strong>{data.miniTask || "최소 단위"}</strong>
-          </section>
-          <section className="tracker-tile level-plus">
-            <span>Plus</span>
-            <strong>{data.plusTask || "보통 단위"}</strong>
-          </section>
-          <section className="tracker-tile level-elite">
-            <span>Elite</span>
-            <strong>{data.eliteTask || "도전 단위"}</strong>
-          </section>
-        </div>
-
-        <section className="tracker-band">
-          <div className="band-title">
-            <Flame size={18} aria-hidden="true" />
-            <span>V1 개인화</span>
-          </div>
-          <p>
-            {miniFailureCount >= 3
-              ? "Mini를 더 쉽게 조정해볼까요?"
-              : "V1에서는 기록만함이 반복될 때 Mini 조정 신호로 봅니다. 오늘의 조건과 막힌 지점은 패턴으로 저장됩니다."}
-          </p>
-        </section>
-
-        <section className="today-strip">
-          <div>
-            <div className="band-title">
-              <CalendarCheck size={18} aria-hidden="true" />
-              <span>오늘 체크인</span>
-            </div>
-            <p>{selectedCheckIn ? createDailyNote(selectedCheckIn, memo) : "오늘의 선택과 패턴 대화를 남깁니다."}</p>
-          </div>
-          <span className={`tracker-status ${selectedCheckIn || "open"}`}>{statusMeta[selectedCheckIn || "open"].label}</span>
-        </section>
-
-        <section className="scorecard-strip" aria-label="이번 달 Mini Plus Elite 카운트">
-          <div>
-            <span>Mini / partial</span>
-            <strong>{partialCount}</strong>
-          </div>
-          <div>
-            <span>Plus / 완료</span>
-            <strong>{levelCounts.plus}</strong>
-          </div>
-          <div>
-            <span>Elite / 완료</span>
-            <strong>{levelCounts.elite}</strong>
-          </div>
-        </section>
-
-        <section className="elastic-scorecard" aria-label="월간 스코어카드">
-          <div className="scorecard-title">Scorecard</div>
-          <div className="scorecard-columns">
-            <section>
-              <span>Counts</span>
-              <div className="score-counts">
-                <strong className="mini-count">Mini {levelCounts.mini}</strong>
-                <strong className="plus-count">Plus {levelCounts.plus}</strong>
-                <strong className="elite-count">Elite {levelCounts.elite}</strong>
+        <section className="daily-overview" aria-label="오늘 체크인과 습관 기준">
+          <section className="today-strip">
+            <div>
+              <div className="band-title">
+                <CalendarCheck size={18} aria-hidden="true" />
+                <span>오늘 체크인</span>
               </div>
+              <p>{selectedCheckIn ? createDailyNote(selectedCheckIn, memo) : "오늘의 선택과 패턴 대화를 남깁니다."}</p>
+            </div>
+            <span className={`tracker-status ${selectedCheckIn || "open"}`}>{statusMeta[selectedCheckIn || "open"].label}</span>
+          </section>
+
+          <div className="level-stack" aria-label="Mini Plus Elite 기준과 월간 횟수">
+            <section className="tracker-tile level-mini">
+              <div>
+                <span>Mini</span>
+                <strong>{data.miniTask || "최소 단위"}</strong>
+              </div>
+              <small>이번 달 {levelCounts.mini}회</small>
             </section>
-            <section>
-              <span>Base Scores</span>
-              <p>
-                {levelCounts.mini} + ({levelCounts.plus} x 2) + ({levelCounts.elite} x 3) = <strong>{baseScore}</strong>
-              </p>
+            <section className="tracker-tile level-plus">
+              <div>
+                <span>Plus</span>
+                <strong>{data.plusTask || "보통 단위"}</strong>
+              </div>
+              <small>이번 달 {levelCounts.plus}회</small>
             </section>
-            <section>
-              <span>Bonuses</span>
-              {bonusItems.length ? (
-                <ul>
-                  {bonusItems.map((item) => (
-                    <li key={item.label}>
-                      {item.label} +{item.points}
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p>아직 없음</p>
-              )}
-            </section>
-            <section>
-              <span>Total Score</span>
-              <p>
-                {baseScore} + {bonusScore} = <strong>{totalScore}</strong>
-              </p>
+            <section className="tracker-tile level-elite">
+              <div>
+                <span>Elite</span>
+                <strong>{data.eliteTask || "도전 단위"}</strong>
+              </div>
+              <small>이번 달 {levelCounts.elite}회</small>
             </section>
           </div>
         </section>
@@ -1597,7 +1544,7 @@ function fallbackOnboardingTurn(
     case "plus":
       return advanceOnboardingStep(currentStep, { plusTask: text }, "좋아요. Elite는 여유 있는 날 도전하는 단위예요. 어떻게 할까요?");
     case "elite":
-      return advanceOnboardingStep(currentStep, { eliteTask: text }, "완성됐어요. 이제 매일 체크인을 시작해볼게요.");
+      return advanceOnboardingStep(currentStep, { eliteTask: text }, "완성됐어요. 이제부터 체크인은 평가가 아니라 관찰이에요. 어떤 조건에서 움직였고 어디서 막혔는지를 기록하면서 내일의 설계를 더 맞춰볼게요.");
     default:
       return stayOnboarding(currentStep, {}, "조금 더 구체적으로 말씀해주세요.");
   }
@@ -1684,6 +1631,63 @@ function createPatternMemo(status: CheckInStatus, turns: DailyPatternTurn[]) {
       `[코치 응답 ${index + 1}] ${turn.assistant}`,
     ]),
   ].join("\n");
+}
+
+function parsePatternMemo(memo: string | null | undefined): { turns: DailyPatternTurn[] } {
+  if (!memo) return { turns: [] };
+
+  const turns: DailyPatternTurn[] = [];
+  for (const line of memo.split("\n")) {
+    const patternMatch = line.match(/^\[패턴 \d+\]\s*(.*)$/);
+    if (patternMatch) {
+      turns.push({ user: patternMatch[1]?.trim() ?? "", assistant: "" });
+      continue;
+    }
+
+    const replyMatch = line.match(/^\[코치 응답 \d+\]\s*(.*)$/);
+    if (replyMatch) {
+      const last = turns.at(-1);
+      if (last) last.assistant = replyMatch[1]?.trim() ?? "";
+    }
+  }
+
+  return { turns };
+}
+
+function buildDailyConversationMessages(checkIns: ElasticCheckIn[], activeDate: string): Message[] {
+  const pastCheckIns = checkIns
+    .filter((checkIn) => checkIn.checkin_date <= activeDate)
+    .slice(-7);
+
+  if (!pastCheckIns.length) return [];
+
+  return pastCheckIns.flatMap((checkIn) => {
+    const status = checkIn.result;
+    const turns = parsePatternMemo(checkIn.memo).turns;
+    const label = statusMeta[status]?.label ?? status;
+    const header: Message = {
+      role: "assistant",
+      text: `${formatDateLabel(checkIn.checkin_date)} 기록: ${label}`,
+    };
+
+    if (!turns.length) return [header];
+
+    return [
+      header,
+      ...turns.flatMap((turn, index) => [
+        {
+          role: "user" as const,
+          text: index === 0 ? `${label}\n${turn.user}` : turn.user,
+        },
+        ...(turn.assistant ? [{ role: "assistant" as const, text: turn.assistant }] : []),
+      ]),
+    ];
+  });
+}
+
+function formatDateLabel(dateKey: string) {
+  const [, month, day] = dateKey.split("-");
+  return `${Number(month)}월 ${Number(day)}일`;
 }
 
 function createPatternCoachReply(status: CheckInStatus | null, text: string, turnIndex: number) {
@@ -1809,15 +1813,6 @@ function createMonthRecords(checkIns: ElasticCheckIn[]): DailyRecord[] {
     const day = index + 1;
     return { day, status: byDay.get(day) ?? "open" };
   });
-}
-
-function countRecentMiniFailures(checkIns: ElasticCheckIn[]) {
-  let count = 0;
-  for (const checkIn of [...checkIns].sort((a, b) => b.checkin_date.localeCompare(a.checkin_date))) {
-    if (checkIn.result === "not_done") count += 1;
-    else break;
-  }
-  return count;
 }
 
 function getBonusItems(levelCounts: { mini: number; plus: number; elite: number; notDone: number; noResponse: number }) {
