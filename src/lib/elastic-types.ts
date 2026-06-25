@@ -23,6 +23,7 @@ export type ElasticProfile = {
   plus_task: string;
   elite_task: string;
   monthly_vision: string | null;
+  last_onboarding_step: string | null;
   onboarding_completed_at: string | null;
   updated_at: string;
 };

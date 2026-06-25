@@ -196,6 +196,23 @@ export async function saveElasticCheckIn(input: {
   return data as ElasticCheckIn;
 }
 
+export async function updateOnboardingStep(userId: string, step: string, scope = LIVE_ELASTIC_SCOPE) {
+  if (!hasSupabaseConfig || !supabase) {
+    const current = readLocalProfile();
+    if (current?.user_id === userId) {
+      writeLocalProfile({ ...current, last_onboarding_step: step, updated_at: new Date().toISOString() });
+    }
+    return;
+  }
+
+  await supabase
+    .from("elastic_profiles")
+    .upsert(
+      { user_id: userId, scope, last_onboarding_step: step, updated_at: new Date().toISOString() },
+      { onConflict: "user_id,scope" },
+    );
+}
+
 export async function deleteElasticScope(userId: string, scope: string) {
   if (!hasSupabaseConfig || !supabase) {
     const profile = readLocalProfile();

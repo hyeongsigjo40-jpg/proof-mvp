@@ -14,6 +14,7 @@ import {
   saveElasticCheckIn,
   saveElasticProfile,
   updateElasticTasks,
+  updateOnboardingStep,
 } from "@/lib/elastic-store";
 import type { ElasticCheckIn, ElasticCheckInStatus, ElasticProfile } from "@/lib/elastic-types";
 import { useProofSession } from "@/lib/use-proof-session";
@@ -319,6 +320,11 @@ export default function Home() {
       chatLog.scrollTo({ top: chatLog.scrollHeight, behavior: "smooth" });
     });
   }, [messages]);
+
+  useEffect(() => {
+    if (!userId || mode !== "onboarding" || step === "complete") return;
+    void updateOnboardingStep(userId, step, storageScope);
+  }, [userId, step, mode, storageScope]);
 
   const levelCounts = useMemo(
     () => ({
@@ -813,6 +819,7 @@ export default function Home() {
       plus_task: nextData.plusTask,
       elite_task: nextData.eliteTask,
       monthly_vision: null,
+      last_onboarding_step: "complete",
       onboarding_completed_at: new Date().toISOString(),
     });
   }
