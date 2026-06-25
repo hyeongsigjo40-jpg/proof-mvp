@@ -447,6 +447,11 @@ export default function Home() {
       setStep("mini");
       showMiniOpening(data.habitAction || "이 습관");
     }
+    if (step === "habit_action" && data.habitAction) {
+      setStep("goal_complete");
+      const summary = buildSmartSentence(data);
+      assistant(`"${data.habitAction}"으로 확정할게요.\n\n${summary ? `\n${summary}\n\n` : ""}기간, 빈도, 언제, 얼마나는 아래에서 확인하고 수정할 수 있어요. 괜찮으면 다음으로 넘어가세요.`);
+    }
     if (step === "mini" || step === "plus" || step === "elite") {
       confirmElasticLevel(step);
     }
@@ -1502,6 +1507,7 @@ function OnboardingComposer({
   }
 
   const isElasticStep = step === "mini" || step === "plus" || step === "elite";
+  const isHabitActionStep = step === "habit_action";
   const levelLabel = step === "mini" ? "Mini" : step === "plus" ? "Plus" : step === "elite" ? "Elite" : "";
   const levelValue = step === "mini" ? data.miniTask : step === "plus" ? data.plusTask : step === "elite" ? data.eliteTask : "";
 
@@ -1522,6 +1528,11 @@ function OnboardingComposer({
           <ArrowUp size={18} aria-hidden="true" />
         </button>
       </form>
+      {isHabitActionStep && data.habitAction && (
+        <button className="primary-button elastic-confirm-btn" disabled={pending} onClick={onContinue} type="button">
+          확정 — {data.habitAction}
+        </button>
+      )}
       {isElasticStep && levelValue && (
         <button className="primary-button elastic-confirm-btn" disabled={pending} onClick={onContinue} type="button">
           {levelLabel} 확정 — {levelValue}

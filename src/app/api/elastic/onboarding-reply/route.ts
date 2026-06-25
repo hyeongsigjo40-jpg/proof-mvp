@@ -492,35 +492,17 @@ async function createHabitPlanTurn(
     return stay(
       "habit_action",
       dataPatch,
-      "좋아요. 실행 계획으로 만들려면 먼저 어떤 행동을 할지 필요해요. 예: 헬스장에서 웨이트 3종목 하기, 밤 11시에 책 10쪽 읽기처럼 말해주세요.",
+      "실행 계획으로 만들려면 먼저 어떤 행동을 할지 필요해요. 예: 헬스장에서 웨이트 3종목 하기, 밤 11시에 책 10쪽 읽기처럼 말해주세요.",
     );
   }
 
-  if (!merged.habitAmount) {
-    return stay(
-      "habit_action",
-      dataPatch,
-      `좋아요. "${merged.habitAction}"로 잡아둘게요. 한 번에 얼마나 할까요? 예: 20분, 3종목, 10쪽처럼 완료 기준을 말해주세요.`,
-    );
-  }
-
-  if (!merged.habitFrequency && !merged.habitWhen) {
-    return stay(
-      "habit_action",
-      dataPatch,
-      `좋아요. "${merged.habitAction}" ${merged.habitAmount} 기준으로 잡아둘게요. 얼마나 자주 하거나 언제 할까요? 예: 주 3회, 매일 밤 11시, 퇴근 후처럼 말해주세요.`,
-    );
-  }
-
-  if (!merged.habitPeriod) merged.habitPeriod = "4주";
-
-  return {
-    intent: "answer",
-    should_advance: true,
-    next_step: "goal_complete",
-    data_patch: toPatchArray(createHabitPlanPatch(body.data, merged)),
-    reply: `좋아요. 이렇게 실행 계획을 잡아볼게요.\n\n${formatHabitPlanSummary(merged)}\n\n수정할 게 있으면 편하게 말해주세요. 괜찮으면 아래 버튼으로 이 행동을 Mini / Plus / Elite로 나눠볼게요.`,
-  };
+  // habitAction이 추출됐으면 항상 echo + confirm 버튼 대기
+  // 나머지 SMART 필드는 확정 후 goal_complete에서 채움
+  return stay(
+    "habit_action",
+    dataPatch,
+    `습관 행동: "${merged.habitAction}"\n\n습관은 오늘/내일 바로 실행할 수 있고, 완료 여부를 yes/no로 판단할 수 있어야 해요. 정말 이걸로 하시겠어요?\n\n다른 행동을 원하면 다시 입력하세요.`,
+  );
 }
 
 async function parseHabitPlanWithGPT(
