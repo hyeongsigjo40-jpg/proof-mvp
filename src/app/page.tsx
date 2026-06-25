@@ -1248,6 +1248,11 @@ function OnboardingComposer({
     textarea.style.height = `${Math.min(textarea.scrollHeight, 130)}px`;
   }, [input, pending, step]);
 
+  useEffect(() => {
+    if (pending || step === "complete" || step === "bridge" || step === "goal_complete") return;
+    requestAnimationFrame(() => textareaRef.current?.focus({ preventScroll: true }));
+  }, [pending, step]);
+
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
 
@@ -1325,6 +1330,22 @@ function DailyCheckIn({
   onRequestPatternChat: () => void;
   onRetryHabitGoalEdit: () => void;
 }) {
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const composerVisible = stage === "checkin" || stage === "pattern_chat" || stage === "goal_edit";
+
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+
+    textarea.style.height = "auto";
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 130)}px`;
+  }, [patternInput, pending, stage]);
+
+  useEffect(() => {
+    if (pending || !composerVisible) return;
+    requestAnimationFrame(() => textareaRef.current?.focus({ preventScroll: true }));
+  }, [composerVisible, pending, stage, selectedCheckIn]);
+
   function handlePatternSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (stage === "goal_edit") {
@@ -1394,13 +1415,14 @@ function DailyCheckIn({
         </div>
       ) : null}
 
-      {(stage === "checkin" || stage === "pattern_chat" || stage === "goal_edit") ? (
+      {composerVisible ? (
         <form className="chat-composer daily-chat-composer" onSubmit={handlePatternSubmit}>
           <textarea
             disabled={pending}
             value={patternInput}
             onKeyDown={handleKeyDown}
             onChange={(event) => setPatternInput(event.target.value)}
+            ref={textareaRef}
             placeholder={
               stage === "pattern_chat"
                 ? "예: 집에 돌아오는 순간부터 에너지가 확 떨어졌어요."
