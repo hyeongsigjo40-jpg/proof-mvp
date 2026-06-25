@@ -519,7 +519,7 @@ async function createHabitPlanTurn(
     should_advance: true,
     next_step: "goal_complete",
     data_patch: toPatchArray(createHabitPlanPatch(body.data, merged)),
-    reply: `좋아요. 이렇게 실행 계획을 잡아볼게요.\n\n${formatHabitPlanSummary(merged)}\n\n이제 이 행동을 Mini / Plus / Elite로 나눠서, 컨디션이 낮은 날에도 완전히 실패한 날이 되지 않게 만들 거예요.`,
+    reply: `좋아요. 이렇게 실행 계획을 잡아볼게요.\n\n${formatHabitPlanSummary(merged)}\n\n수정할 게 있으면 편하게 말해주세요. 괜찮으면 아래 버튼으로 이 행동을 Mini / Plus / Elite로 나눠볼게요.`,
   };
 }
 

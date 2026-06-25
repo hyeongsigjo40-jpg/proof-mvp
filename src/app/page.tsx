@@ -47,6 +47,8 @@ type GoalData = {
 type Message = {
   role: "assistant" | "user";
   text: string;
+  emphasizeFirstLine?: boolean;
+  variant?: "default" | "question" | "system";
 };
 
 type DailyPatternTurn = {
@@ -136,15 +138,17 @@ const emptyOnboarding: OnboardingData = {
 const emptyGoalData: GoalData = { lifeArea: "", whyChange: "", identityStatement: "" };
 
 const SERVICE_INTRO =
-  "Proof는 목표를 세우는 데서 끝나지 않고, 실제 행동으로 이어지도록 돕는 변화 기록 서비스예요.\n원하는 변화가 왜 자주 막히는지 함께 살펴보고, 매일 남길 수 있는 작은 증거를 쌓아가며 나에게 맞는 실행 방식을 찾아갑니다.";
+  "Proof는 원하는 변화를 매일의 작은 행동으로 이어주는 서비스예요.\n목표가 왜 자주 막히는지 함께 살펴보고, 나에게 맞는 실행 방식을 찾아갑니다.";
 const ONBOARDING_INTRO =
-  "먼저 대화를 통해 옆에 있는 목표와 패턴을 함께 채워볼게요.\n바꾸고 싶은 방향, 반복해서 막히는 상황, 그때의 생각과 감정을 정리한 뒤 바로 실행할 수 있는 작은 습관으로 바꿉니다. 이후에는 매일 체크인으로 성공과 실패를 평가가 아니라 데이터로 기록해 다음 행동을 조정해요.";
+  "먼저 목표 카드를 함께 채워볼게요.\n바꾸고 싶은 방향과 반복해서 막히는 상황을 정리한 뒤, 바로 실행할 수 있는 작은 습관으로 바꿔요.";
 const GOAL_AREA_QUESTION =
-  "요즘 가장 바꾸고 싶은 삶의 영역은 무엇인가요?\n공부, 운동, 수면, 일, 감정관리, 인간관계 중 어디에 가까운지 자유롭게 말해주세요.";
+  "요즘 가장 바꾸고 싶은 영역은 무엇인가요?\n공부, 운동, 수면, 일, 감정관리, 인간관계 중 어디에 가까운지 편하게 말해주세요.";
 const HABIT_ACTION_OPENING =
   "이제 목표를 실제 실행 계획으로 바꿔볼게요.\n한 문장으로 편하게 말해주세요. 기간, 빈도, 언제, 행동, 양이 들어가면 좋아요.\n\n예: 4주 동안 주 3회, 퇴근 후 헬스장에서 웨이트 3종목을 60분 하기\n아직 정하지 못한 건 비워도 괜찮아요. 제가 부족한 부분만 이어서 물어볼게요.";
 const DAILY_CHECKIN_PROMPT =
   "오늘의 습관은 어떤 흐름이었나요?\n이 체크인은 평가가 아니라 관찰이에요. 잘 됐다면 어떤 조건이 도와줬는지, 안 됐다면 어디서 막혔는지를 남겨볼게요. 기록 자체가 내일의 설계를 더 똑똑하게 만드는 데이터가 됩니다.";
+const HABIT_SETUP_COMPLETE =
+  "습관 설정 완료\n이제 목표를 정하는 단계는 끝났어요.\n오늘부터는 실행하고, 기록하고, 다시 맞춰가면 됩니다.\n실패한 날도 기록하면 조정할 수 있고, 조정이 쌓이면 결국 나에게 맞는 성공 방식이 됩니다.";
 
 const selfNarrativeKeywords = ["의지", "한심", "원래 그런", "이상해", "못하는 사람", "의지력"];
 
@@ -185,6 +189,8 @@ const MINI_OPENING = (habitAction: string) => [
 const initialMessages: Message[] = [];
 const DEBUG_SESSION_KEY = "proof-elastic-debug-session";
 const KOREAN_WEEKDAYS = ["일요일", "월요일", "화요일", "수요일", "목요일", "금요일", "토요일"];
+const CHAT_LOG_START = "[채팅 로그 JSON]";
+const CHAT_LOG_END = "[/채팅 로그 JSON]";
 
 function createDebugSessionId() {
   return crypto.randomUUID();
@@ -334,8 +340,12 @@ export default function Home() {
     setMessages((current) => [...current, { role: "user", text }]);
     setInput("");
 
-    if (step === "mini" || step === "plus" || step === "elite") {
-      await advanceOnboarding(text);
+    if (step === "goal_complete") {
+      await reviseHabitPlan(text);
+    } else if (step === "plus" || step === "elite") {
+      handleElasticLevelAnswer(step, text);
+    } else if (step === "mini") {
+      handleElasticLevelAnswer(step, text);
     } else {
       await advanceGoal(text);
     }
@@ -361,6 +371,70 @@ export default function Home() {
       identityStatement: nextData.goalIdentityStatement,
     });
     setPending(false);
+  }
+
+  async function reviseHabitPlan(text: string) {
+    setPending(true);
+    const currentData = { ...data };
+    const turn = await runOnboardingController("habit_action", text, currentData);
+    recordDebugEvent("habit_action", text, turn);
+    const result = turn.final;
+    const nextData = applyOnboardingPatch(currentData, result.data_patch);
+
+    setData(nextData);
+    assistant(result.reply);
+    setStep(result.next_step === "goal_complete" ? "goal_complete" : result.next_step);
+    setGoalData({
+      lifeArea: nextData.lifeArea,
+      whyChange: nextData.whyChange,
+      identityStatement: nextData.goalIdentityStatement,
+    });
+    setPending(false);
+  }
+
+  function handleElasticLevelAnswer(level: ElasticLevel, text: string) {
+    const field = `${level}Task` as const;
+    const currentTask = data[field];
+
+    if (isConfirmingAnswer(text)) {
+      if (!currentTask) {
+        assistant(`확정할 ${elasticLevelLabels[level]}가 아직 없어요. 먼저 ${elasticLevelLabels[level]} 기준을 말해주세요.`);
+        return;
+      }
+
+      const next = nextElasticLevelStep(level);
+      if (next) {
+        setStep(next);
+        assistant(`${elasticLevelLabels[level]}는 "${currentTask}"로 확정할게요.\n\n${levelOpeningQuestion(next)}`);
+      } else {
+        setStep("complete");
+        void completeOnboardingWithLevel("elite", currentTask);
+      }
+      return;
+    }
+
+    const candidate = normalizeLevelCandidate(level, text);
+    setData((current) => ({ ...current, [field]: candidate }));
+    if (level === "mini") setNextMini(candidate);
+    if (level === "plus") setNextPlus(candidate);
+    if (level === "elite") setNextElite(candidate);
+    assistant(createLevelConfirmationMessage(level, candidate));
+  }
+
+  async function completeOnboardingWithLevel(level: ElasticLevel, task: string) {
+    const nextData = { ...data, [`${level}Task`]: task };
+    setData(nextData);
+    setNextMini(nextData.miniTask);
+    setNextPlus(nextData.plusTask);
+    setNextElite(nextData.eliteTask);
+    await persistProfile(nextData);
+    setMode("daily");
+    setMessages((current) => [
+      ...current,
+      { role: "assistant", text: `좋아요. Elite는 "${task}"로 확정할게요.` },
+      { role: "assistant", text: HABIT_SETUP_COMPLETE, emphasizeFirstLine: true, variant: "system" },
+      { role: "assistant", text: DAILY_CHECKIN_PROMPT },
+    ]);
   }
 
   async function advanceOnboarding(text: string) {
@@ -415,7 +489,11 @@ export default function Home() {
       setNextElite(nextData.eliteTask);
       await persistProfile(nextData);
       setMode("daily");
-      assistant(DAILY_CHECKIN_PROMPT);
+      setMessages((current) => [
+        ...current,
+        { role: "assistant", text: HABIT_SETUP_COMPLETE, emphasizeFirstLine: true, variant: "system" },
+        { role: "assistant", text: DAILY_CHECKIN_PROMPT },
+      ]);
     }
   }
 
@@ -435,14 +513,23 @@ export default function Home() {
     const userMessage = [statusMeta[status].label, blockerLabel ? `막힌 이유: ${blockerLabel}` : "", trimmed]
       .filter(Boolean)
       .join("\n");
+    const userTurn: Message = { role: "user", text: userMessage };
+    const messagesWithUser = [...messages, userTurn];
 
-    setMessages((current) => [...current, { role: "user", text: userMessage }]);
+    setMessages(messagesWithUser);
     setPatternInput("");
     setPending(true);
     try {
       const coachReply = createPatternCoachReply(status, trimmed, 0, reason);
       const patternTurns = [{ user: trimmed, assistant: coachReply }];
-      const patternMemo = createPatternMemo(status, patternTurns, reason);
+      const assistantTurns: Message[] = [
+        ...(selfNarrativeKeywords.some((keyword) => trimmed.includes(keyword))
+          ? [{ role: "assistant" as const, text: "기억하시죠, 오늘은 그 사람인지가 아니라 이 행동을 했는지만 보기로 했었죠" }]
+          : []),
+        { role: "assistant", text: `${coachReply}\n\n내일도 습관 목표를 그대로 가져갈까요? 필요하면 오늘 패턴에 맞게 목표를 수정해도 돼요.` },
+      ];
+      const nextMessages = [...messagesWithUser, ...assistantTurns];
+      const patternMemo = createPatternMemo(status, patternTurns, reason, nextMessages);
       const hasSelfNarrative = selfNarrativeKeywords.some((keyword) => patternMemo.includes(keyword));
       const saved = await saveElasticCheckIn({
         user_id: userId,
@@ -455,13 +542,7 @@ export default function Home() {
       applySavedCheckIn(saved);
       const nextCheckIns = upsertCheckIn(checkIns, saved);
       setCheckIns(nextCheckIns);
-      setMessages((current) => [
-        ...current,
-        ...(hasSelfNarrative
-          ? [{ role: "assistant" as const, text: "기억하시죠, 오늘은 그 사람인지가 아니라 이 행동을 했는지만 보기로 했었죠" }]
-          : []),
-        { role: "assistant", text: `${coachReply}\n\n내일도 습관 목표를 그대로 가져갈까요? 필요하면 오늘 패턴에 맞게 목표를 수정해도 돼요.` },
-      ]);
+      setMessages(nextMessages);
       setMemo(patternMemo);
       setDailyPatternTurns(patternTurns);
       setDailyStage("tomorrow_confirm");
@@ -473,52 +554,65 @@ export default function Home() {
 
   async function keepTomorrowPlan() {
     setPendingTaskPatch(null);
-    setMessages((current) => [
-      ...current,
+    const nextMessages: Message[] = [
+      ...messages,
       { role: "user", text: "그대로 가져갈게요" },
       {
         role: "assistant",
         text: `좋아요. 내일도 "${data.habitAction || "이 습관"}" 목표를 그대로 이어갈게요.\n내일도 작게라도 꾸준히 가봅시다.`,
       },
-    ]);
+    ];
+    setMessages(nextMessages);
     setDailyStage("done");
+    await persistDailyChatLog(nextMessages);
   }
 
-  function requestPatternChat() {
-    setMessages((current) => [
-      ...current,
+  async function requestPatternChat() {
+    const nextMessages: Message[] = [
+      ...messages,
       { role: "user", text: "오늘 패턴을 더 이야기해볼게요" },
       { role: "assistant", text: "좋아요. 오늘 흐름에서 더 보고 싶은 지점을 한 문장으로 적어주세요." },
-    ]);
+    ];
+    setMessages(nextMessages);
     setPatternInput("");
     setDailyStage("pattern_chat");
+    await persistDailyChatLog(nextMessages);
   }
 
-  function requestHabitGoalEdit() {
-    setMessages((current) => [
-      ...current,
+  async function requestHabitGoalEdit() {
+    const nextMessages: Message[] = [
+      ...messages,
       { role: "user", text: "습관목표 수정하기" },
       {
         role: "assistant",
         text: "좋아요. 내일 Mini / Plus / Elite 목표를 어떻게 바꿀까요? 바꾸고 싶은 것만 한 문장으로 말해도 돼요.",
       },
-    ]);
+    ];
+    setMessages(nextMessages);
     setPendingTaskPatch(null);
     setPatternInput("");
     setDailyStage("goal_edit");
+    await persistDailyChatLog(nextMessages);
   }
 
   async function savePatternFollowup(text: string) {
     const trimmed = text.trim();
     if (!userId || !trimmed || !selectedCheckIn || selectedCheckIn === "open" || selectedCheckIn === "no_response") return;
 
-    setMessages((current) => [...current, { role: "user", text: trimmed }]);
+    const userTurn: Message = { role: "user", text: trimmed };
+    const messagesWithUser = [...messages, userTurn];
+    setMessages(messagesWithUser);
     setPatternInput("");
     setPending(true);
     try {
       const followupReply = createPatternFollowupReply(trimmed);
       const nextTurns = [...dailyPatternTurns, { user: trimmed, assistant: followupReply }];
-      const patternMemo = createPatternMemo(selectedCheckIn, nextTurns, blockerReason);
+      const assistantTurn: Message = {
+        role: "assistant",
+        text: `${followupReply}\n\n내일도 습관 목표를 그대로 가져갈까요? 필요하면 목표를 수정해도 돼요.`,
+      };
+      const nextMessages = [...messagesWithUser, assistantTurn];
+      const patternMemo = createPatternMemo(selectedCheckIn, nextTurns, blockerReason, nextMessages);
       const saved = await saveElasticCheckIn({
         user_id: userId,
         scope: storageScope,
@@ -531,10 +625,7 @@ export default function Home() {
       setCheckIns(upsertCheckIn(checkIns, saved));
       setMemo(patternMemo);
       setDailyPatternTurns(nextTurns);
-      setMessages((current) => [
-        ...current,
-        { role: "assistant", text: `${followupReply}\n\n내일도 습관 목표를 그대로 가져갈까요? 필요하면 목표를 수정해도 돼요.` },
-      ]);
+      setMessages(nextMessages);
       setDailyStage("tomorrow_confirm");
     } finally {
       setPending(false);
@@ -545,7 +636,8 @@ export default function Home() {
     const trimmed = text.trim();
     if (!trimmed) return;
 
-    setMessages((current) => [...current, { role: "user", text: trimmed }]);
+    const messagesWithUser: Message[] = [...messages, { role: "user", text: trimmed }];
+    setMessages(messagesWithUser);
     setPatternInput("");
     setPending(true);
     try {
@@ -553,10 +645,8 @@ export default function Home() {
       const patch = controllerPatchToTaskPatch(result.patch);
       const hasPatch = Object.keys(patch).length > 0;
       setPendingTaskPatch(hasPatch ? patch : null);
-      setMessages((current) => [
-        ...current,
-        { role: "assistant", text: result.reply },
-      ]);
+      const nextMessages: Message[] = [...messagesWithUser, { role: "assistant", text: result.reply }];
+      setMessages(nextMessages);
       setDailyStage(
         result.next_step === "confirm_patch" && hasPatch
           ? "goal_patch_confirm"
@@ -564,6 +654,7 @@ export default function Home() {
             ? "done"
             : "goal_edit",
       );
+      await persistDailyChatLog(nextMessages);
     } finally {
       setPending(false);
     }
@@ -591,36 +682,42 @@ export default function Home() {
       setNextPlus(nextTasks.plus_task);
       setNextElite(nextTasks.elite_task);
       setPendingTaskPatch(null);
-      setMessages((current) => [
-        ...current,
+      const nextMessages: Message[] = [
+        ...messages,
         { role: "user", text: "이대로 저장" },
         { role: "assistant", text: "좋아요. 내일 목표를 저장했어요.\n내일도 작게라도 꾸준히 가봅시다." },
-      ]);
+      ];
+      setMessages(nextMessages);
       setDailyStage("done");
+      await persistDailyChatLog(nextMessages);
     } finally {
       setPending(false);
     }
   }
 
-  function retryHabitGoalEdit() {
+  async function retryHabitGoalEdit() {
     setPendingTaskPatch(null);
     setPatternInput("");
-    setMessages((current) => [
-      ...current,
+    const nextMessages: Message[] = [
+      ...messages,
       { role: "user", text: "다시 수정" },
       { role: "assistant", text: "좋아요. 바꾸고 싶은 Mini / Plus / Elite 목표를 다시 한 문장으로 말해주세요." },
-    ]);
+    ];
+    setMessages(nextMessages);
     setDailyStage("goal_edit");
+    await persistDailyChatLog(nextMessages);
   }
 
-  function keepHabitGoalUnchanged() {
+  async function keepHabitGoalUnchanged() {
     setPendingTaskPatch(null);
-    setMessages((current) => [
-      ...current,
+    const nextMessages: Message[] = [
+      ...messages,
       { role: "user", text: "그대로 유지" },
       { role: "assistant", text: "좋아요. 내일 목표는 그대로 유지할게요.\n내일도 작게라도 꾸준히 가봅시다." },
-    ]);
+    ];
+    setMessages(nextMessages);
     setDailyStage("done");
+    await persistDailyChatLog(nextMessages);
   }
 
   function editTodayCheckIn() {
@@ -666,6 +763,30 @@ export default function Home() {
     const nextCheckIns = upsertCheckIn(checkIns, saved);
     setCheckIns(nextCheckIns);
     assistant(await createContextualReply("no_response_saved", data, nextCheckIns));
+  }
+
+  async function persistDailyChatLog(nextMessages: Message[]) {
+    if (
+      !userId ||
+      !selectedCheckIn ||
+      selectedCheckIn === "open" ||
+      selectedCheckIn === "no_response" ||
+      !memo
+    ) {
+      return;
+    }
+
+    const nextMemo = appendChatLogToMemo(stripChatLogFromMemo(memo), nextMessages);
+    const saved = await saveElasticCheckIn({
+      user_id: userId,
+      scope: storageScope,
+      checkin_date: activeCheckInDate,
+      result: selectedCheckIn,
+      memo: nextMemo,
+      self_narrative_detected: selfNarrativeKeywords.some((keyword) => nextMemo.includes(keyword)),
+    });
+    setMemo(nextMemo);
+    setCheckIns((current) => upsertCheckIn(current, saved));
   }
 
   async function persistProfile(nextData: OnboardingData) {
@@ -835,9 +956,9 @@ export default function Home() {
 
   function showOnboardingOpening() {
     setMessages([
-      { role: "assistant", text: SERVICE_INTRO },
-      { role: "assistant", text: ONBOARDING_INTRO },
-      { role: "assistant", text: GOAL_AREA_QUESTION },
+      { role: "assistant", text: SERVICE_INTRO, emphasizeFirstLine: true },
+      { role: "assistant", text: ONBOARDING_INTRO, emphasizeFirstLine: true },
+      { role: "assistant", text: GOAL_AREA_QUESTION, emphasizeFirstLine: true, variant: "question" },
     ]);
   }
 
@@ -996,8 +1117,8 @@ export default function Home() {
         <div className="chat-title">
           <MessageCircle size={18} aria-hidden="true" />
           <div>
-            <strong>{mode === "onboarding" ? "Proof Onboarding" : "Daily Check-in"}</strong>
-            <span>{mode === "onboarding" ? "챗봇 온보딩" : "Supabase 저장 연결됨"}</span>
+            <strong>{mode === "onboarding" ? "첫 목표 만들기" : "Daily Check-in"}</strong>
+            <span>{mode === "onboarding" ? "바꾸고 싶은 한 가지를 작은 습관으로 바꿔요" : "Supabase 저장 연결됨"}</span>
           </div>
         </div>
 
@@ -1010,8 +1131,11 @@ export default function Home() {
           <>
             <div className="chat-log" ref={chatLogRef}>
               {messages.map((message, index) => (
-                <div className={`chat-bubble ${message.role}`} key={`${message.role}-${index}`}>
-                  {message.text}
+                <div
+                  className={`chat-bubble ${message.role}${message.variant ? ` ${message.variant}` : ""}`}
+                  key={`${message.role}-${index}`}
+                >
+                  {renderMessageText(message)}
                 </div>
               ))}
             </div>
@@ -1335,7 +1459,7 @@ function OnboardingComposer({
   }, [input, pending, step]);
 
   useEffect(() => {
-    if (pending || step === "complete" || step === "bridge" || step === "goal_complete") return;
+    if (pending || step === "complete" || step === "bridge") return;
     requestAnimationFrame(() => textareaRef.current?.focus({ preventScroll: true }));
   }, [pending, step]);
 
@@ -1356,9 +1480,26 @@ function OnboardingComposer({
 
   if (step === "goal_complete") {
     return (
-      <button className="primary-button" disabled={pending} onClick={onContinue} type="button">
-        {pending ? "준비하는 중…" : "습관 트래커로 넘어갈게요"}
-      </button>
+      <div className="goal-complete-composer">
+        <form className="chat-composer" onSubmit={onSubmit}>
+          <textarea
+            aria-label="실행 계획 수정"
+            disabled={pending}
+            onChange={(event) => setInput(event.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder={pending ? "Proof가 수정하는 중…" : "수정할 점이 있으면 말해주세요"}
+            ref={textareaRef}
+            rows={1}
+            value={input}
+          />
+          <button aria-label="수정 보내기" disabled={pending} type="submit">
+            <ArrowUp size={18} aria-hidden="true" />
+          </button>
+        </form>
+        <button className="primary-button" disabled={pending} onClick={onContinue} type="button">
+          {pending ? "준비하는 중…" : "이대로 Mini / Plus / Elite 나누기"}
+        </button>
+      </div>
     );
   }
 
@@ -1653,6 +1794,66 @@ function normalizeHabitTaskPatchResult(result: HabitTaskPatchControllerResult): 
   };
 }
 
+function renderMessageText(message: Message) {
+  if (!message.emphasizeFirstLine) return message.text;
+
+  const [firstLine, ...restLines] = message.text.split("\n");
+  const rest = restLines.join("\n");
+  return (
+    <>
+      <strong className="chat-bubble-lead">{firstLine}</strong>
+      {rest ? `\n${rest}` : null}
+    </>
+  );
+}
+
+function isConfirmingAnswer(text: string) {
+  return /^(네|네\.|응|응\.|어|어\.|좋아|좋아요|확정|확정할게|그걸로|그걸로 할게|그대로|이대로|ㅇㅇ)$/i.test(text.trim());
+}
+
+function nextElasticLevelStep(level: ElasticLevel): ElasticLevel | null {
+  if (level === "mini") return "plus";
+  if (level === "plus") return "elite";
+  return null;
+}
+
+function levelOpeningQuestion(level: ElasticLevel) {
+  if (level === "plus") {
+    return "이제 Plus는 보통 날의 기본 목표예요. 보통 컨디션이면 어디까지 하면 좋을까요?";
+  }
+  return "이제 Elite는 여유 있는 날의 확장 목표예요. 컨디션이 좋은 날에는 어디까지 해볼까요?";
+}
+
+function createLevelConfirmationMessage(level: ElasticLevel, candidate: string) {
+  const label = elasticLevelLabels[level];
+  return `좋아요. ${label} 후보는 "${candidate}"로 볼게요.\n\n${levelDescription(level)}\n\n"${candidate}"로 확정하시겠어요? 바꾸고 싶으면 새 ${label}를 다시 말해주세요.`;
+}
+
+function levelDescription(level: ElasticLevel) {
+  if (level === "mini") {
+    return "Mini는 잘함/못함을 평가하는 기준이 아니라, 아주 힘든 날에도 흐름을 끊지 않기 위해 남기는 최소 증거예요. 너무 작아 보여도 괜찮고, 정말 컨디션이 낮은 날에도 할 수 있어야 해요.";
+  }
+  if (level === "plus") {
+    return "Plus는 보통 날의 기본 목표예요. 무리해서 최고치를 찍는 기준이 아니라, 평소 컨디션이라면 안정적으로 해낼 수 있는 성공 기준으로 잡으면 좋아요.";
+  }
+  return "Elite는 여유 있는 날의 확장 목표예요. 매번 해야 하는 기준이 아니라, 컨디션과 시간이 충분할 때 더 해볼 수 있는 보너스 기준으로 잡으면 좋아요.";
+}
+
+function normalizeLevelCandidate(level: ElasticLevel, text: string) {
+  const label = elasticLevelLabels[level];
+  return text
+    .trim()
+    .replace(/^그러면\s*/i, "")
+    .replace(new RegExp(`^${label}\\s*(는|로|:)?\\s*`, "i"), "")
+    .replace(new RegExp(`^${label.toLowerCase()}\\s*(는|로|:)?\\s*`, "i"), "")
+    .replace(new RegExp(`^${level}\\s*(는|로|:)?\\s*`, "i"), "")
+    .replace(/^미니\s*(는|로|:)?\s*/i, "")
+    .replace(/^플러스\s*(는|로|:)?\s*/i, "")
+    .replace(/^엘리트\s*(는|로|:)?\s*/i, "")
+    .replace(/\?+$/g, "")
+    .trim();
+}
+
 function normalizePatchValue(value: string | null | undefined) {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
@@ -1667,12 +1868,104 @@ function controllerPatchToTaskPatch(patch: HabitTaskPatchControllerResult["patch
 }
 
 function normalizeOnboardingResult(
-  _currentStep: OnboardingStep,
+  currentStep: OnboardingStep,
   _latestUserAnswer: string,
-  _data: OnboardingData,
+  data: OnboardingData,
   result: OnboardingControllerResult,
 ) {
-  return result;
+  return ensureAnsweredStepAdvances(currentStep, data, result);
+}
+
+function ensureAnsweredStepAdvances(
+  currentStep: OnboardingStep,
+  data: OnboardingData,
+  result: OnboardingControllerResult,
+): OnboardingControllerResult {
+  const answeredField = fieldForStep(currentStep);
+  if (!answeredField) return result;
+  if (!result.data_patch.some((patch) => patch.field === answeredField && patch.value.trim())) return result;
+
+  const nextStep = getNextOnboardingStep(currentStep);
+  if (result.should_advance && result.next_step === nextStep && replyIncludesNextQuestion(result.reply, nextStep, data, result)) {
+    return result;
+  }
+
+  const nextData = applyOnboardingPatch(data, result.data_patch);
+  return {
+    ...result,
+    intent: "answer",
+    should_advance: true,
+    next_step: nextStep,
+    reply: withNextQuestion(result.reply, nextStep, nextData),
+  };
+}
+
+function fieldForStep(step: OnboardingStep): keyof OnboardingData | null {
+  switch (step) {
+    case "goal_area":
+      return "lifeArea";
+    case "goal_why":
+      return "whyChange";
+    case "goal_identity":
+      return "goalIdentityStatement";
+    case "failure_situation":
+      return "failureSituation";
+    case "failure_feeling":
+      return "failureFeeling";
+    case "habit_period":
+      return "habitPeriod";
+    case "habit_frequency":
+      return "habitFrequency";
+    case "habit_when":
+      return "habitWhen";
+    case "habit_amount":
+      return "habitAmount";
+    default:
+      return null;
+  }
+}
+
+function replyIncludesNextQuestion(
+  reply: string,
+  nextStep: OnboardingStep,
+  data: OnboardingData,
+  result: OnboardingControllerResult,
+) {
+  const question = nextQuestionForStep(nextStep, applyOnboardingPatch(data, result.data_patch));
+  if (!question) return true;
+  return reply.includes(question) || reply.includes(question.split("\n")[0]);
+}
+
+function withNextQuestion(reply: string, nextStep: OnboardingStep, data: OnboardingData) {
+  const question = nextQuestionForStep(nextStep, data);
+  if (!question) return reply;
+  if (reply.includes(question) || reply.includes(question.split("\n")[0])) return reply;
+  return `${reply}\n\n${question}`;
+}
+
+function nextQuestionForStep(step: OnboardingStep, data: OnboardingData) {
+  switch (step) {
+    case "goal_why":
+      return `${data.lifeArea || "그 영역"}을 바꾸고 싶은 이유를 한 문장으로 말해주세요.`;
+    case "goal_identity":
+      return "이 목표가 이루어지면 어떤 사람이 되어 있을까요? 한 문장으로 말해주세요.";
+    case "failure_situation":
+      return "이 목표를 향해 가다가 최근에 흐트러졌던 순간이 있었나요? 어떤 상황이었어요?";
+    case "failure_feeling":
+      return "그때 어떤 생각이나 감정이 들었어요?";
+    case "bridge":
+      return "";
+    case "habit_frequency":
+      return "일주일에 몇 번 할 계획인가요?";
+    case "habit_when":
+      return "언제 할 건가요? 예: 저녁 식사 후, 아침 7시에";
+    case "habit_amount":
+      return "한 번에 얼마나 할 건가요? 예: 10분, 3km, 1세트";
+    case "goal_complete":
+      return "좋아요, 실행 계획이 잡혔어요. 수정할 게 있으면 편하게 말해주세요. 괜찮으면 아래 버튼으로 이 행동을 Mini / Plus / Elite로 나눠볼게요.";
+    default:
+      return "";
+  }
 }
 
 function fallbackOnboardingTurn(
@@ -1682,6 +1975,16 @@ function fallbackOnboardingTurn(
 ): OnboardingControllerResult {
   const text = latestUserAnswer.trim();
   switch (currentStep) {
+    case "goal_area":
+      return advanceOnboardingStep(currentStep, { lifeArea: text }, `${text}을 바꾸고 싶은 이유를 한 문장으로 말해주세요.`);
+    case "goal_why":
+      return advanceOnboardingStep(currentStep, { whyChange: text }, "이 목표가 이루어지면 어떤 사람이 되어 있을까요? 한 문장으로 말해주세요.");
+    case "goal_identity":
+      return advanceOnboardingStep(currentStep, { goalIdentityStatement: text }, "이 목표를 향해 가다가 최근에 흐트러졌던 순간이 있었나요? 어떤 상황이었어요?");
+    case "failure_situation":
+      return advanceOnboardingStep(currentStep, { failureSituation: text }, "그때 어떤 생각이나 감정이 들었어요?");
+    case "failure_feeling":
+      return advanceOnboardingStep(currentStep, { failureFeeling: text }, "좋아요. 이제 목표를 실제 실행 계획으로 바꿔볼게요.");
     case "mini":
       return advanceOnboardingStep(currentStep, { miniTask: text }, "좋아요. Plus는 보통 날의 기본 성공 단위예요. 어떻게 설정할까요?");
     case "plus":
@@ -1787,7 +2090,7 @@ function buildSmartSentence(data: OnboardingData): string {
 function createDailyNote(status: CheckInStatus, memo: string) {
   const statusText = statusMeta[status]?.label ?? status;
   if (!memo) return statusText;
-  const firstLine = memo
+  const firstLine = stripChatLogFromMemo(memo)
     .split("\n")
     .find((line) => line.startsWith("[패턴 "))
     ?.replace(/^\[패턴 \d+\]\s*/, "")
@@ -1795,9 +2098,14 @@ function createDailyNote(status: CheckInStatus, memo: string) {
   return firstLine ? `${statusText}: ${firstLine}` : statusText;
 }
 
-function createPatternMemo(status: CheckInStatus, turns: DailyPatternTurn[], blockerReason: BlockerReason | null = null) {
+function createPatternMemo(
+  status: CheckInStatus,
+  turns: DailyPatternTurn[],
+  blockerReason: BlockerReason | null = null,
+  chatLog: Message[] = [],
+) {
   const statusText = statusMeta[status]?.label ?? status;
-  return [
+  const patternMemo = [
     `[오늘의 선택] ${statusText}`,
     ...(blockerReason ? [`[막힌 이유] ${blockerReasonLabel[blockerReason]}`] : []),
     ...turns.flatMap((turn, index) => [
@@ -1805,6 +2113,7 @@ function createPatternMemo(status: CheckInStatus, turns: DailyPatternTurn[], blo
       `[코치 응답 ${index + 1}] ${turn.assistant}`,
     ]),
   ].join("\n");
+  return appendChatLogToMemo(patternMemo, chatLog);
 }
 
 function parsePatternMemo(memo: string | null | undefined): { turns: DailyPatternTurn[]; blockerReason: BlockerReason | null } {
@@ -1812,7 +2121,7 @@ function parsePatternMemo(memo: string | null | undefined): { turns: DailyPatter
 
   const turns: DailyPatternTurn[] = [];
   let blockerReason: BlockerReason | null = null;
-  for (const line of memo.split("\n")) {
+  for (const line of stripChatLogFromMemo(memo).split("\n")) {
     const blockerMatch = line.match(/^\[막힌 이유\]\s*(.*)$/);
     if (blockerMatch) {
       const label = blockerMatch[1]?.trim() ?? "";
@@ -1836,12 +2145,61 @@ function parsePatternMemo(memo: string | null | undefined): { turns: DailyPatter
   return { turns, blockerReason };
 }
 
+function appendChatLogToMemo(patternMemo: string, chatLog: Message[]) {
+  if (!chatLog.length) return patternMemo;
+  return [
+    patternMemo,
+    CHAT_LOG_START,
+    JSON.stringify(chatLog.map(sanitizeMessageForStorage)),
+    CHAT_LOG_END,
+  ].join("\n");
+}
+
+function sanitizeMessageForStorage(message: Message): Message {
+  return {
+    role: message.role,
+    text: message.text,
+    ...(message.emphasizeFirstLine ? { emphasizeFirstLine: true } : {}),
+    ...(message.variant ? { variant: message.variant } : {}),
+  };
+}
+
+function stripChatLogFromMemo(memo: string) {
+  const start = memo.indexOf(CHAT_LOG_START);
+  if (start < 0) return memo;
+  return memo.slice(0, start).trim();
+}
+
+function readChatLogFromMemo(memo: string | null | undefined): Message[] {
+  if (!memo) return [];
+  const start = memo.indexOf(CHAT_LOG_START);
+  const end = memo.indexOf(CHAT_LOG_END);
+  if (start < 0 || end < 0 || end <= start) return [];
+
+  const raw = memo.slice(start + CHAT_LOG_START.length, end).trim();
+  try {
+    const parsed = JSON.parse(raw) as Message[];
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((message) => (message.role === "assistant" || message.role === "user") && typeof message.text === "string")
+      .map(sanitizeMessageForStorage);
+  } catch {
+    return [];
+  }
+}
+
 function buildDailyConversationMessages(checkIns: ElasticCheckIn[], activeDate: string): Message[] {
   const pastCheckIns = checkIns
     .filter((checkIn) => checkIn.checkin_date <= activeDate)
     .slice(-7);
 
   if (!pastCheckIns.length) return [];
+
+  const latestChatLog = [...pastCheckIns]
+    .reverse()
+    .map((checkIn) => readChatLogFromMemo(checkIn.memo))
+    .find((chatLog) => chatLog.length > 0);
+  if (latestChatLog) return latestChatLog;
 
   return pastCheckIns.flatMap((checkIn) => {
     const status = checkIn.result;

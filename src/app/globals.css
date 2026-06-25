@@ -1497,6 +1497,27 @@ blockquote {
   justify-self: start;
 }
 
+.chat-bubble.question {
+  background: #fff;
+  border: 1px solid rgba(49, 91, 76, 0.28);
+  box-shadow: inset 0 0 0 1px rgba(49, 91, 76, 0.08);
+}
+
+.chat-bubble.system {
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(49, 91, 76, 0.24);
+  color: var(--text);
+  justify-self: center;
+  max-width: 92%;
+  text-align: center;
+}
+
+.chat-bubble-lead {
+  color: var(--ink);
+  display: inline;
+  font-weight: 900;
+}
+
 .chat-bubble.user {
   background: var(--primary);
   color: #fff;
