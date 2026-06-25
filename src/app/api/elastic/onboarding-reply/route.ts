@@ -52,6 +52,14 @@ type OnboardingControllerResponse = {
 
 type OnboardingField = keyof OnboardingData;
 
+type CorrectionRouterResult = {
+  intent: "answer_current_step" | "correct_previous_field" | "unclear";
+  target_field: OnboardingField | null;
+  value: string | null;
+  confidence: number;
+  reason: string;
+};
+
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 const model = process.env.OPENAI_MODEL || "gpt-5.4-mini";
 
@@ -98,8 +106,6 @@ const fieldLabel: Record<OnboardingField, string> = {
   eliteTask: "Elite",
 };
 
-const lifeAreaOptions = ["공부", "운동", "수면", "일", "감정관리", "인간관계", "연애", "프로젝트"];
-
 const onboardingStepContext =
   "현재 호출은 onboarding_controller다. 전체 목표는 목표 영역, 실패 패턴, SMART 습관, Mini/Plus/Elite 실행 단위를 순서대로 완성하는 것이다.\n" +
   "각 턴은 current_step의 목적에 맞게 사용자의 답변을 구조화해 data_patch에 저장하고, 다음 단계로 넘길 정보를 만든다.\n" +
@@ -108,14 +114,14 @@ const onboardingStepContext =
 
 export async function POST(request: Request) {
   const body = (await request.json()) as OnboardingControllerRequest;
-  const correction = detectPreviousFieldCorrection(body);
-
-  if (correction) {
-    return NextResponse.json(correction);
-  }
 
   if (!openai) {
-    return NextResponse.json(fallbackTurn(body));
+    return NextResponse.json(fallbackCorrectionTurn(body) ?? fallbackTurn(body));
+  }
+
+  const correction = await routeCorrection(openai, body);
+  if (correction) {
+    return NextResponse.json(correction);
   }
 
   const response = await openai.responses.create({
@@ -194,17 +200,118 @@ export async function POST(request: Request) {
   return NextResponse.json(JSON.parse(response.output_text) as OnboardingControllerResponse);
 }
 
-function detectPreviousFieldCorrection(body: OnboardingControllerRequest): OnboardingControllerResponse | null {
+async function routeCorrection(
+  client: OpenAI,
+  body: OnboardingControllerRequest,
+): Promise<OnboardingControllerResponse | null> {
   const text = body.latest_user_answer?.trim() ?? "";
   if (!text) return null;
 
-  const field = detectCorrectionField(text, body.current_step);
-  if (!field || field === currentFieldByStep[body.current_step]) return null;
-  if (!isPreviousField(field, body.current_step)) return null;
+  const response = await client.responses.create({
+    model,
+    input: [
+      {
+        role: "system",
+        content:
+          "너는 Proof 온보딩의 correction router다. 사용자의 최신 발화가 현재 단계 답변인지, 이전에 수집한 필드를 바꾸려는 정정인지, 애매한지 분류한다.\n\n" +
+          "[whole_process]\n목표 영역→바꾸고 싶은 이유→정체성 문장→실패 상황→감정/생각→SMART 습관→Mini/Plus/Elite 순서로 진행한다.\n\n" +
+          "[important]\n- 사용자가 현재 질문에 답하고 있으면 answer_current_step이다.\n- 사용자가 이전 답변을 바꾸고 있으면 correct_previous_field다.\n- correct_previous_field는 target_field가 current_step보다 이전 필드일 때만 사용한다.\n- 사용자가 '연애를 못할 것 같은 열등감 때문에'라고 말하는 것은 goal_why 답변이지 lifeArea correction이 아니다.\n- 사용자가 '연애로 할까', '프로젝트 말고 연애', '삶의 영역은 연애로'라고 말하면 lifeArea correction이다.\n- 사용자가 '기간은 4주로 바꿀래'라고 말하면 habitPeriod correction이다.\n- 사용자가 'Mini는 1문제만으로'라고 말하면 miniTask correction이다.\n- 확신이 낮으면 unclear로 둔다.",
+      },
+      {
+        role: "user",
+        content: JSON.stringify({
+          current_step: body.current_step,
+          current_step_goal: stepGoal(body.current_step),
+          previous_fields: previousFieldSnapshot(body.current_step, body.data),
+          latest_user_answer: text,
+          current_field: currentFieldByStep[body.current_step] ?? null,
+        }),
+      },
+    ],
+    text: {
+      format: {
+        type: "json_schema",
+        name: "onboarding_correction_router",
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          required: ["intent", "target_field", "value", "confidence", "reason"],
+          properties: {
+            intent: { type: "string", enum: ["answer_current_step", "correct_previous_field", "unclear"] },
+            target_field: {
+              type: ["string", "null"],
+              enum: [
+                "lifeArea", "whyChange", "goalIdentityStatement",
+                "failureSituation", "failureFeeling",
+                "habitAction", "habitPeriod", "habitFrequency", "habitWhen", "habitAmount",
+                "miniTask", "plusTask", "eliteTask", null,
+              ],
+            },
+            value: { type: ["string", "null"] },
+            confidence: { type: "number", minimum: 0, maximum: 1 },
+            reason: { type: "string" },
+          },
+        },
+      },
+    },
+  });
 
-  const value = extractCorrectionValue(field, text);
-  if (!value) return null;
+  return correctionFromRouter(body, JSON.parse(response.output_text) as CorrectionRouterResult);
+}
 
+function correctionFromRouter(
+  body: OnboardingControllerRequest,
+  routed: CorrectionRouterResult,
+): OnboardingControllerResponse | null {
+  if (routed.intent !== "correct_previous_field") return null;
+  if (!routed.target_field || !routed.value?.trim()) return null;
+  if (routed.confidence < 0.72) return null;
+  if (routed.target_field === currentFieldByStep[body.current_step]) return null;
+  if (!isPreviousField(routed.target_field, body.current_step)) return null;
+
+  const value = routed.value.trim();
+  const nextData = { ...body.data, [routed.target_field]: value };
+  return {
+    intent: "correction",
+    should_advance: false,
+    next_step: body.current_step,
+    data_patch: [{ field: routed.target_field, value }],
+    reply: `${fieldLabel[routed.target_field]}은 "${value}"로 바꿔둘게요. ${currentQuestion(body.current_step, nextData)}`,
+  };
+}
+
+function previousFieldSnapshot(currentStep: OnboardingStep, data: OnboardingData) {
+  return Object.entries(fieldStep)
+    .filter(([, step]) => stepOrder.indexOf(step) < stepOrder.indexOf(currentStep))
+    .map(([field, step]) => ({
+      field,
+      label: fieldLabel[field as OnboardingField],
+      step,
+      value: data[field as OnboardingField] ?? "",
+    }));
+}
+
+function isPreviousField(field: OnboardingField, currentStep: OnboardingStep) {
+  return stepOrder.indexOf(fieldStep[field]) < stepOrder.indexOf(currentStep);
+}
+
+function fallbackCorrectionTurn(body: OnboardingControllerRequest): OnboardingControllerResponse | null {
+  const text = body.latest_user_answer?.trim() ?? "";
+  if (!text) return null;
+
+  const miniMatch = text.match(/(?:mini|미니)\s*(?:는|은|를|을|:)?\s*(.+)/i);
+  const plusMatch = text.match(/(?:plus|플러스)\s*(?:는|은|를|을|:)?\s*(.+)/i);
+  const eliteMatch = text.match(/(?:elite|엘리트)\s*(?:는|은|를|을|:)?\s*(.+)/i);
+  const pairs: [OnboardingField, RegExpMatchArray | null][] = [
+    ["miniTask", miniMatch],
+    ["plusTask", plusMatch],
+    ["eliteTask", eliteMatch],
+  ];
+  const matched = pairs.find(([field, match]) => match?.[1] && isPreviousField(field, body.current_step));
+  if (!matched?.[1]?.[1]) return null;
+
+  const [field, match] = matched;
+  const value = match[1].trim();
   const nextData = { ...body.data, [field]: value };
   return {
     intent: "correction",
@@ -213,74 +320,6 @@ function detectPreviousFieldCorrection(body: OnboardingControllerRequest): Onboa
     data_patch: [{ field, value }],
     reply: `${fieldLabel[field]}은 "${value}"로 바꿔둘게요. ${currentQuestion(body.current_step, nextData)}`,
   };
-}
-
-function detectCorrectionField(text: string, currentStep: OnboardingStep): OnboardingField | null {
-  const normalized = text.toLowerCase();
-  const strongCorrection = hasStrongCorrectionCue(text);
-
-  if (/\bmini\b|미니/i.test(text)) return "miniTask";
-  if (/\bplus\b|플러스/i.test(text)) return "plusTask";
-  if (/\belite\b|엘리트/i.test(text)) return "eliteTask";
-  if (/삶의\s*영역|관심\s*영역|영역|분야/.test(text)) return "lifeArea";
-  if (/바꾸고\s*싶은\s*이유|이유/.test(text)) return "whyChange";
-  if (/정체성|정체성\s*문장/.test(text)) return "goalIdentityStatement";
-  if (/감정|생각|느낌|기분/.test(text)) return "failureFeeling";
-  if (/실패\s*상황|흐트러졌던\s*상황|상황은|상황을|사건은|사건을|순간은|순간을/.test(text)) return "failureSituation";
-  if (/습관\s*행동|행동은|행동을|뭘\s*할|무엇을\s*할/.test(text)) return "habitAction";
-  if (/기간|며칠|몇\s*주|몇주|동안/.test(text)) return "habitPeriod";
-  if (/빈도|주\s*몇|몇\s*번|몇번|매일/.test(text)) return "habitFrequency";
-  if (/언제|타이밍|시간대|몇\s*시에/.test(text)) return "habitWhen";
-  if (/얼마나|실행량/.test(text)) return "habitAmount";
-
-  const matchedLifeAreas = lifeAreaOptions.filter((option) => normalized.includes(option.toLowerCase()));
-  if (strongCorrection && matchedLifeAreas.length > 0 && stepOrder.indexOf(currentStep) > stepOrder.indexOf("goal_area")) {
-    return "lifeArea";
-  }
-
-  return null;
-}
-
-function hasStrongCorrectionCue(text: string) {
-  return /아니|말고|그게\s*아니라|그건\s*아니|바꿀|바꾸|수정|정정|다시|생각해보니|차라리|로\s*할|으로\s*할|로\s*갈|으로\s*갈|로\s*잡|으로\s*잡|로\s*정|으로\s*정|가\s*맞|이\s*맞|로\s*하고|으로\s*하고/.test(text);
-}
-
-function isPreviousField(field: OnboardingField, currentStep: OnboardingStep) {
-  return stepOrder.indexOf(fieldStep[field]) < stepOrder.indexOf(currentStep);
-}
-
-function extractCorrectionValue(field: OnboardingField, text: string) {
-  if (field === "lifeArea") {
-    const matches = lifeAreaOptions.filter((option) => text.includes(option));
-    return matches.at(-1) ?? cleanupCorrectionText(text, field);
-  }
-
-  return cleanupCorrectionText(text, field);
-}
-
-function cleanupCorrectionText(text: string, field: OnboardingField) {
-  const fieldPatterns: Record<OnboardingField, RegExp> = {
-    lifeArea: /삶의\s*영역|관심\s*영역|영역|분야/g,
-    whyChange: /바꾸고\s*싶은\s*이유|이유/g,
-    goalIdentityStatement: /정체성\s*문장|정체성/g,
-    failureSituation: /실패\s*상황|흐트러졌던\s*상황|상황|사건|순간/g,
-    failureFeeling: /감정|생각|느낌|기분/g,
-    habitAction: /습관\s*행동|행동/g,
-    habitPeriod: /기간/g,
-    habitFrequency: /빈도/g,
-    habitWhen: /언제|타이밍|시간대/g,
-    habitAmount: /얼마나|실행량/g,
-    miniTask: /\bmini\b|미니/gi,
-    plusTask: /\bplus\b|플러스/gi,
-    eliteTask: /\belite\b|엘리트/gi,
-  };
-
-  return text
-    .replace(fieldPatterns[field], "")
-    .replace(/^(음|어|아|그럼|그러면|좋아|좋아요|아니|그게\s*아니라|그건\s*아니고|생각해보니|차라리)\s*/g, "")
-    .replace(/^(은|는|을|를|이|가|:|-)\s*/g, "")
-    .replace(/\s*(로|으로)?\s*(할까|할게|할래|하고\s*싶어|하고\s*싶다|잡을게|정할게|바꿀게)\s*$/g, "")
-    .trim();
 }
 
 function currentQuestion(step: OnboardingStep, data: OnboardingData) {
