@@ -54,7 +54,8 @@ type DailyPatternTurn = {
   assistant: string;
 };
 
-type DailyStage = "checkin" | "tomorrow_confirm" | "pattern_chat" | "done";
+type DailyStage = "checkin" | "tomorrow_confirm" | "pattern_chat" | "goal_edit" | "goal_patch_confirm" | "done";
+type HabitTaskPatch = Partial<Record<`${ElasticLevel}Task`, string>>;
 
 type OnboardingData = {
   lifeArea: string;
@@ -96,6 +97,17 @@ type OnboardingDebugEvent = {
   raw?: OnboardingControllerResult;
   final: OnboardingControllerResult;
   source: "api" | "fallback";
+};
+
+type HabitTaskPatchControllerResult = {
+  intent: "patch" | "clarify" | "keep";
+  reply: string;
+  patch: {
+    mini_task: string | null;
+    plus_task: string | null;
+    elite_task: string | null;
+  };
+  next_step: "confirm_patch" | "ask_clarifying_question" | "close_without_patch";
 };
 
 type DailyRecord = {
@@ -183,6 +195,7 @@ export default function Home() {
   const [patternInput, setPatternInput] = useState("");
   const [dailyPatternTurns, setDailyPatternTurns] = useState<DailyPatternTurn[]>([]);
   const [dailyStage, setDailyStage] = useState<DailyStage>("checkin");
+  const [pendingTaskPatch, setPendingTaskPatch] = useState<HabitTaskPatch | null>(null);
   const [nextMini, setNextMini] = useState("");
   const [nextPlus, setNextPlus] = useState("");
   const [nextElite, setNextElite] = useState("");
@@ -405,7 +418,7 @@ export default function Home() {
         ...(hasSelfNarrative
           ? [{ role: "assistant" as const, text: "기억하시죠, 오늘은 그 사람인지가 아니라 이 행동을 했는지만 보기로 했었죠" }]
           : []),
-        { role: "assistant", text: `${coachReply}\n\n내일도 습관 목표를 그대로 가져갈까요? 아니면 오늘의 패턴에 대해서 더 이야기해볼까요?` },
+        { role: "assistant", text: `${coachReply}\n\n내일도 습관 목표를 그대로 가져갈까요? 필요하면 오늘 패턴에 맞게 목표를 수정해도 돼요.` },
       ]);
       setMiniFailureCount((current) => (status === "not_done" ? current + 1 : 0));
       setMemo(patternMemo);
@@ -419,6 +432,7 @@ export default function Home() {
   }
 
   async function keepTomorrowPlan() {
+    setPendingTaskPatch(null);
     setMessages((current) => [
       ...current,
       { role: "user", text: "그대로 가져갈게요" },
@@ -440,32 +454,27 @@ export default function Home() {
     setDailyStage("pattern_chat");
   }
 
+  function requestHabitGoalEdit() {
+    setMessages((current) => [
+      ...current,
+      { role: "user", text: "습관목표 수정하기" },
+      {
+        role: "assistant",
+        text: "좋아요. 내일 Mini / Plus / Elite 목표를 어떻게 바꿀까요? 바꾸고 싶은 것만 한 문장으로 말해도 돼요.",
+      },
+    ]);
+    setPendingTaskPatch(null);
+    setPatternInput("");
+    setDailyStage("goal_edit");
+  }
+
   async function savePatternFollowup(text: string) {
     const trimmed = text.trim();
     if (!userId || !trimmed || !selectedCheckIn || selectedCheckIn === "open" || selectedCheckIn === "no_response") return;
 
     setPending(true);
     try {
-      const adjustment = parseTomorrowTaskAdjustment(trimmed);
-      let followupReply = createPatternFollowupReply(trimmed);
-      if (adjustment) {
-        const nextTasks = {
-          mini_task: adjustment.level === "mini" ? adjustment.task : nextMini || data.miniTask,
-          plus_task: adjustment.level === "plus" ? adjustment.task : nextPlus || data.plusTask,
-          elite_task: adjustment.level === "elite" ? adjustment.task : nextElite || data.eliteTask,
-        };
-        await updateElasticTasks(userId, nextTasks, storageScope);
-        setData((current) => ({
-          ...current,
-          miniTask: nextTasks.mini_task,
-          plusTask: nextTasks.plus_task,
-          eliteTask: nextTasks.elite_task,
-        }));
-        setNextMini(nextTasks.mini_task);
-        setNextPlus(nextTasks.plus_task);
-        setNextElite(nextTasks.elite_task);
-        followupReply = `좋아요. 내일 ${elasticLevelLabels[adjustment.level]}는 "${adjustment.task}"로 가져갈게요.`;
-      }
+      const followupReply = createPatternFollowupReply(trimmed);
       const nextTurns = [...dailyPatternTurns, { user: trimmed, assistant: followupReply }];
       const patternMemo = createPatternMemo(selectedCheckIn, nextTurns);
       const saved = await saveElasticCheckIn({
@@ -483,13 +492,95 @@ export default function Home() {
       setMessages((current) => [
         ...current,
         { role: "user", text: trimmed },
-        { role: "assistant", text: `${followupReply}\n\n내일도 습관 목표를 그대로 가져갈까요?` },
+        { role: "assistant", text: `${followupReply}\n\n내일도 습관 목표를 그대로 가져갈까요? 필요하면 목표를 수정해도 돼요.` },
       ]);
       setPatternInput("");
       setDailyStage("tomorrow_confirm");
     } finally {
       setPending(false);
     }
+  }
+
+  async function saveHabitGoalEditDraft(text: string) {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+
+    setPending(true);
+    try {
+      const result = await runHabitTaskPatchController(trimmed, data, checkIns);
+      const patch = controllerPatchToTaskPatch(result.patch);
+      const hasPatch = Object.keys(patch).length > 0;
+      setPendingTaskPatch(hasPatch ? patch : null);
+      setMessages((current) => [
+        ...current,
+        { role: "user", text: trimmed },
+        { role: "assistant", text: result.reply },
+      ]);
+      setPatternInput("");
+      setDailyStage(
+        result.next_step === "confirm_patch" && hasPatch
+          ? "goal_patch_confirm"
+          : result.next_step === "close_without_patch"
+            ? "done"
+            : "goal_edit",
+      );
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function confirmHabitGoalPatch() {
+    if (!userId || !pendingTaskPatch) return;
+
+    const nextTasks = {
+      mini_task: pendingTaskPatch.miniTask ?? nextMini ?? data.miniTask,
+      plus_task: pendingTaskPatch.plusTask ?? nextPlus ?? data.plusTask,
+      elite_task: pendingTaskPatch.eliteTask ?? nextElite ?? data.eliteTask,
+    };
+
+    setPending(true);
+    try {
+      await updateElasticTasks(userId, nextTasks, storageScope);
+      setData((current) => ({
+        ...current,
+        miniTask: nextTasks.mini_task,
+        plusTask: nextTasks.plus_task,
+        eliteTask: nextTasks.elite_task,
+      }));
+      setNextMini(nextTasks.mini_task);
+      setNextPlus(nextTasks.plus_task);
+      setNextElite(nextTasks.elite_task);
+      setPendingTaskPatch(null);
+      setMessages((current) => [
+        ...current,
+        { role: "user", text: "이대로 저장" },
+        { role: "assistant", text: "좋아요. 내일 목표를 저장했어요.\n내일도 작게라도 꾸준히 가봅시다." },
+      ]);
+      setDailyStage("done");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  function retryHabitGoalEdit() {
+    setPendingTaskPatch(null);
+    setPatternInput("");
+    setMessages((current) => [
+      ...current,
+      { role: "user", text: "다시 수정" },
+      { role: "assistant", text: "좋아요. 바꾸고 싶은 Mini / Plus / Elite 목표를 다시 한 문장으로 말해주세요." },
+    ]);
+    setDailyStage("goal_edit");
+  }
+
+  function keepHabitGoalUnchanged() {
+    setPendingTaskPatch(null);
+    setMessages((current) => [
+      ...current,
+      { role: "user", text: "그대로 유지" },
+      { role: "assistant", text: "좋아요. 내일 목표는 그대로 유지할게요.\n내일도 작게라도 꾸준히 가봅시다." },
+    ]);
+    setDailyStage("done");
   }
 
   function editTodayCheckIn() {
@@ -499,6 +590,7 @@ export default function Home() {
       { role: "assistant", text: DAILY_CHECKIN_PROMPT },
     ]);
     setSelectedCheckIn(null);
+    setPendingTaskPatch(null);
     setPatternInput("");
     setDailyStage("checkin");
   }
@@ -577,6 +669,7 @@ export default function Home() {
     setPatternInput("");
     setDailyPatternTurns([]);
     setDailyStage("checkin");
+    setPendingTaskPatch(null);
     setNextMini("");
     setNextPlus("");
     setNextElite("");
@@ -644,6 +737,7 @@ export default function Home() {
     setPatternInput("");
     setDailyPatternTurns([]);
     setDailyStage("checkin");
+    setPendingTaskPatch(null);
     setMode("daily");
     setStep("complete");
     setMessages([
@@ -910,11 +1004,16 @@ export default function Home() {
                 selectedCheckIn={selectedCheckIn}
                 setPatternInput={setPatternInput}
                 onCheckIn={handleCheckIn}
+                onConfirmHabitGoalPatch={confirmHabitGoalPatch}
                 onEditToday={editTodayCheckIn}
                 onKeepTomorrowPlan={keepTomorrowPlan}
+                onKeepHabitGoalUnchanged={keepHabitGoalUnchanged}
+                onRequestHabitGoalEdit={requestHabitGoalEdit}
                 onSaveCheckIn={saveDailyCheckIn}
+                onSaveHabitGoalEditDraft={saveHabitGoalEditDraft}
                 onSavePatternFollowup={savePatternFollowup}
                 onRequestPatternChat={requestPatternChat}
+                onRetryHabitGoalEdit={retryHabitGoalEdit}
               />
             )}
 
@@ -938,6 +1037,7 @@ export default function Home() {
                 onSkipGoal={skipGoalPhase}
                 patternInput={patternInput}
                 pending={pending}
+                pendingTaskPatch={pendingTaskPatch}
                 scope={storageScope}
                 selectedCheckIn={selectedCheckIn}
                 sessionId={debugSessionId}
@@ -985,6 +1085,7 @@ function OnboardingDebugPanel({
   onSkipGoal,
   patternInput,
   pending,
+  pendingTaskPatch,
   scope,
   selectedCheckIn,
   sessionId,
@@ -1008,6 +1109,7 @@ function OnboardingDebugPanel({
   onSkipGoal: () => void;
   patternInput: string;
   pending: boolean;
+  pendingTaskPatch: HabitTaskPatch | null;
   scope: string;
   selectedCheckIn: CheckInStatus | null;
   sessionId: string;
@@ -1038,6 +1140,7 @@ function OnboardingDebugPanel({
     ["선택 raw", selectedCheckIn ?? ""],
     ["패턴 입력", patternInput],
     ["대화 턴", dailyPatternTurns.length ? String(dailyPatternTurns.length) : ""],
+    ["수정 후보", pendingTaskPatch ? formatTaskPatch(pendingTaskPatch) : ""],
     ["저장 가능", selectedCheckIn && dailyPatternTurns.length > 0 ? "true" : "false"],
   ];
   const memoPreview =
@@ -1247,11 +1350,16 @@ function DailyCheckIn({
   stage,
   setPatternInput,
   onCheckIn,
+  onConfirmHabitGoalPatch,
   onEditToday,
+  onKeepHabitGoalUnchanged,
   onKeepTomorrowPlan,
+  onRequestHabitGoalEdit,
   onSaveCheckIn,
+  onSaveHabitGoalEditDraft,
   onSavePatternFollowup,
   onRequestPatternChat,
+  onRetryHabitGoalEdit,
 }: {
   pending: boolean;
   patternInput: string;
@@ -1259,14 +1367,23 @@ function DailyCheckIn({
   stage: DailyStage;
   setPatternInput: (value: string) => void;
   onCheckIn: (status: Exclude<CheckInStatus, "open" | "no_response">) => void;
+  onConfirmHabitGoalPatch: () => void;
   onEditToday: () => void;
+  onKeepHabitGoalUnchanged: () => void;
   onKeepTomorrowPlan: () => void;
+  onRequestHabitGoalEdit: () => void;
   onSaveCheckIn: (status: Exclude<CheckInStatus, "open" | "no_response">, text: string) => void;
+  onSaveHabitGoalEditDraft: (text: string) => void;
   onSavePatternFollowup: (text: string) => void;
   onRequestPatternChat: () => void;
+  onRetryHabitGoalEdit: () => void;
 }) {
   function handlePatternSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (stage === "goal_edit") {
+      onSaveHabitGoalEditDraft(patternInput);
+      return;
+    }
     if (stage === "pattern_chat") {
       onSavePatternFollowup(patternInput);
       return;
@@ -1309,8 +1426,17 @@ function DailyCheckIn({
       {stage === "tomorrow_confirm" ? (
         <div className="daily-quick-replies tomorrow-replies" aria-label="내일 목표 확인">
           <button disabled={pending} onClick={onKeepTomorrowPlan} type="button">그대로 가져가기</button>
+          <button disabled={pending} onClick={onRequestHabitGoalEdit} type="button">습관목표 수정하기</button>
           <button disabled={pending} onClick={onRequestPatternChat} type="button">패턴 더 이야기하기</button>
           <button disabled={pending} onClick={onEditToday} type="button">오늘 기록 수정</button>
+        </div>
+      ) : null}
+
+      {stage === "goal_patch_confirm" ? (
+        <div className="daily-quick-replies tomorrow-replies" aria-label="습관 목표 수정 확인">
+          <button disabled={pending} onClick={onConfirmHabitGoalPatch} type="button">이대로 저장</button>
+          <button disabled={pending} onClick={onRetryHabitGoalEdit} type="button">다시 수정</button>
+          <button disabled={pending} onClick={onKeepHabitGoalUnchanged} type="button">그대로 유지</button>
         </div>
       ) : null}
 
@@ -1321,7 +1447,7 @@ function DailyCheckIn({
         </div>
       ) : null}
 
-      {(stage === "checkin" || stage === "pattern_chat") ? (
+      {(stage === "checkin" || stage === "pattern_chat" || stage === "goal_edit") ? (
         <form className="chat-composer daily-chat-composer" onSubmit={handlePatternSubmit}>
           <textarea
             disabled={pending}
@@ -1331,14 +1457,16 @@ function DailyCheckIn({
             placeholder={
               stage === "pattern_chat"
                 ? "예: 집에 돌아오는 순간부터 에너지가 확 떨어졌어요."
-                : selectedCheckIn
-                  ? "예: 퇴근하고 바로 누우니까 다시 시작하기가 어려웠어요."
-                  : "먼저 Mini, Plus, Elite, 기록만함 중 하나를 골라주세요."
+                : stage === "goal_edit"
+                  ? "예: Plus는 10분 기록하기로 바꾸고, Mini는 1분 시작하기로 낮출래요."
+                  : selectedCheckIn
+                    ? "예: 퇴근하고 바로 누우니까 다시 시작하기가 어려웠어요."
+                    : "먼저 Mini, Plus, Elite, 기록만함 중 하나를 골라주세요."
             }
             rows={1}
           />
           <button
-            aria-label={stage === "pattern_chat" ? "패턴 이야기 보내기" : "오늘 습관 기록 보내기"}
+            aria-label={stage === "pattern_chat" ? "패턴 이야기 보내기" : stage === "goal_edit" ? "습관 목표 수정 보내기" : "오늘 습관 기록 보내기"}
             disabled={pending || (stage === "checkin" && !selectedCheckIn) || !patternInput.trim()}
             type="submit"
           >
@@ -1375,6 +1503,77 @@ async function runOnboardingController(currentStep: OnboardingStep, latestUserAn
       source: "fallback" as const,
     };
   }
+}
+
+async function runHabitTaskPatchController(
+  latestUserAnswer: string,
+  data: OnboardingData,
+  recentCheckIns: ElasticCheckIn[],
+): Promise<HabitTaskPatchControllerResult> {
+  try {
+    const response = await fetch("/api/elastic/habit-task-patch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        latest_user_answer: latestUserAnswer,
+        profile: {
+          habit_name: buildSmartSentence(data) || data.habitAction,
+          habit_action: data.habitAction,
+          habit_period: data.habitPeriod,
+          habit_frequency: data.habitFrequency,
+          habit_when: data.habitWhen,
+          habit_amount: data.habitAmount,
+          mini_task: data.miniTask,
+          plus_task: data.plusTask,
+          elite_task: data.eliteTask,
+        },
+        recent_checkins: recentCheckIns.slice(-7).map((checkIn) => ({
+          checkin_date: checkIn.checkin_date,
+          result: checkIn.result,
+          memo: checkIn.memo,
+        })),
+      }),
+    });
+
+    if (!response.ok) throw new Error("Failed");
+    return normalizeHabitTaskPatchResult((await response.json()) as HabitTaskPatchControllerResult);
+  } catch {
+    return {
+      intent: "clarify",
+      reply: "어떤 기준을 바꿀지 한 번만 더 확인할게요. Mini / Plus / Elite 중 무엇을 어떻게 바꿀까요?",
+      patch: { mini_task: null, plus_task: null, elite_task: null },
+      next_step: "ask_clarifying_question",
+    };
+  }
+}
+
+function normalizeHabitTaskPatchResult(result: HabitTaskPatchControllerResult): HabitTaskPatchControllerResult {
+  const patch = result.patch ?? { mini_task: null, plus_task: null, elite_task: null };
+  const normalized = {
+    mini_task: normalizePatchValue(patch.mini_task),
+    plus_task: normalizePatchValue(patch.plus_task),
+    elite_task: normalizePatchValue(patch.elite_task),
+  };
+  const hasPatch = Boolean(normalized.mini_task || normalized.plus_task || normalized.elite_task);
+  return {
+    intent: result.intent ?? (hasPatch ? "patch" : "clarify"),
+    reply: result.reply || (hasPatch ? `이렇게 바꿔볼게요.\n${formatTaskPatch(controllerPatchToTaskPatch(normalized))}\n이대로 저장할까요?` : "어떤 기준을 바꿀지 한 번만 더 말해주세요."),
+    patch: normalized,
+    next_step: hasPatch ? "confirm_patch" : result.next_step ?? "ask_clarifying_question",
+  };
+}
+
+function normalizePatchValue(value: string | null | undefined) {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function controllerPatchToTaskPatch(patch: HabitTaskPatchControllerResult["patch"]): HabitTaskPatch {
+  return {
+    ...(patch.mini_task ? { miniTask: patch.mini_task } : {}),
+    ...(patch.plus_task ? { plusTask: patch.plus_task } : {}),
+    ...(patch.elite_task ? { eliteTask: patch.elite_task } : {}),
+  };
 }
 
 function normalizeOnboardingResult(
@@ -1521,44 +1720,12 @@ function createPatternFollowupReply(text: string) {
   return "좋아요. 오늘 패턴을 조금 더 선명하게 기록해둘게요.";
 }
 
-function parseTomorrowTaskAdjustment(text: string): { level: ElasticLevel; task: string } | null {
-  const normalized = text.trim();
-  const levelMatch = normalized.match(/(미니|mini|플러스|plus|엘리트|elite)/i);
-  const inferredLevel = inferElasticLevel(normalized);
-  const level = levelMatch ? normalizeElasticLevel(levelMatch[1]) : inferredLevel;
-  if (!level) return null;
-
-  const baseText = levelMatch ? normalized.slice((levelMatch.index ?? 0) + levelMatch[0].length) : normalized;
-  const cleaned = cleanTaskAdjustmentText(baseText);
-
-  const task = cleaned || cleanTaskAdjustmentText(normalized);
-  return task ? { level, task } : null;
-}
-
-function normalizeElasticLevel(rawLevel: string): ElasticLevel {
-  const normalized = rawLevel.toLowerCase();
-  if (normalized === "미니" || normalized === "mini") return "mini";
-  if (normalized === "플러스" || normalized === "plus") return "plus";
-  return "elite";
-}
-
-function inferElasticLevel(text: string): ElasticLevel | null {
-  if (/(1\s*분|일\s*분|최소|작게|가볍게|시작|켜기만|열기만)/.test(text)) return "mini";
-  if (/(보통|기본|10\s*분|십\s*분|플러스|plus)/i.test(text)) return "plus";
-  if (/(도전|많이|완전|엘리트|elite)/i.test(text)) return "elite";
-  return null;
-}
-
-function cleanTaskAdjustmentText(text: string) {
-  return text
-    .trim()
-    .replace(/^(그러면|그럼|일단|아예|내일은?|나는|그냥|조금|음|어|아|좀|:|\s)+/g, "")
-    .replace(/^(는|은|를|을|도|만|로|으로|:|\s)+/g, "")
-    .replace(
-      /(로|으로)?\s*(바꿔도\s*될\s*것\s*같아|바꾸면\s*될\s*것\s*같아|바꾸면\s*좋을\s*것\s*같아|바꾸고\s*싶어|바꿀래|바꿀게|바꿔줘|가져갈게|할래|할게|하면\s*될\s*것\s*같아|하면\s*좋을\s*것\s*같아)[!.。…\s]*$/g,
-      "",
-    )
-    .trim();
+function formatTaskPatch(patch: HabitTaskPatch) {
+  const items: string[] = [];
+  if (patch.miniTask) items.push(`${elasticLevelLabels.mini}: ${patch.miniTask}`);
+  if (patch.plusTask) items.push(`${elasticLevelLabels.plus}: ${patch.plusTask}`);
+  if (patch.eliteTask) items.push(`${elasticLevelLabels.elite}: ${patch.eliteTask}`);
+  return items.join("\n");
 }
 
 function mapProfileToData(profile: ElasticProfile): OnboardingData {
