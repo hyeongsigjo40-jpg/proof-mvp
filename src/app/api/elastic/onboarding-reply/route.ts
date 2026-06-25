@@ -139,6 +139,11 @@ export async function POST(request: Request) {
     return NextResponse.json(correction);
   }
 
+  const deterministicHabitAction = tryCreateDeterministicHabitActionTurn(body);
+  if (deterministicHabitAction) {
+    return NextResponse.json(deterministicHabitAction);
+  }
+
   const response = await openai.responses.create({
     model,
     input: [
@@ -154,6 +159,7 @@ export async function POST(request: Request) {
           "- habit_action은 사용자가 오늘/내일 바로 실행할 수 있고, 직접 통제할 수 있고, 구체적이고, 측정 가능한 루틴 행동이어야 한다.\n" +
           "- 측정 가능하다는 뜻: 완료 여부를 사용자가 yes/no로 판단할 수 있거나, 횟수/시간/분량/대상 수 같은 단위가 들어 있다.\n" +
           "- 구체적이라는 뜻: 무엇을 대상으로 어떤 행동을 하는지가 드러난다. 예: '연애 노력하기'가 아니라 '대화 소재 1개 적기'.\n" +
+          "- 사용자가 행동과 측정 기준을 같이 말하면 저장 가능하다. 예: '헬스장에서 웨이트 3종목 하기', '헬스장에서 웨이트 3종목을 60분 동안 하기'는 habit_action으로 저장한다. 이를 '운동복 입기', '가방 챙기기'처럼 더 작은 준비 행동으로 바꾸지 않는다.\n" +
           "- 외부 사건이 있어야 가능한 행동은 저장하지 않는다. 예: '소개팅이나 매칭 직후 연락하기'는 사용자가 매일 만들 수 없는 조건이므로 부적합하다.\n" +
           "- 사용자가 '작지 않다', '추상적이다', '루틴적으로 할 수 있어야 한다', '추천해줘', '행동 말이야'라고 말하면 그것을 habitAction 값으로 저장하지 않는다.\n" +
           "- 기준을 통과하지 못하면 should_advance=false, data_patch=[]로 두고, 부족한 차원 하나만 좁히는 질문 또는 현재 영역에 맞는 구체 후보 2-3개를 제안한다.\n" +
@@ -440,6 +446,71 @@ function stepGoal(step: OnboardingStep): string {
     default:
       return "온보딩 완료.";
   }
+}
+
+function tryCreateDeterministicHabitActionTurn(body: OnboardingControllerRequest): OnboardingControllerResponse | null {
+  if (body.current_step !== "habit_action") return null;
+
+  const text = body.latest_user_answer?.trim() ?? "";
+  if (!text) return null;
+  if (isMetaHabitActionReply(text)) return null;
+
+  const measurableUnits = text.match(/\d+\s*(?:분|시간|회|세트|종목|km|킬로|쪽|문제|개|장|줄)/g) ?? [];
+  if (measurableUnits.length === 0) return null;
+
+  const hasConcreteAction =
+    /(헬스장|웨이트|러닝머신|스트레칭|스쿼트|운동|공부|독서|읽|쓰|정리|기록|걷|뛰|달리|명상|연습|복습|문제)/.test(text);
+  const hasSpecificExercise = /(웨이트|러닝머신|스트레칭|스쿼트|벤치|데드|랫풀다운|레그|유산소|근력)/.test(text);
+  const isOnlyBroadExercise = /(운동)/.test(text) && !hasSpecificExercise && !/(스트레칭|걷|뛰|달리)/.test(text);
+
+  if (!hasConcreteAction || isOnlyBroadExercise) return null;
+
+  const habitAction = normalizeDeterministicHabitAction(text);
+  const amount = extractHabitAmount(text);
+  const dataPatch: Partial<OnboardingData> = { habitAction };
+  if (amount) dataPatch.habitAmount = amount;
+
+  const amountNote = amount ? ` ${amount} 기준도 함께 반영해둘게요.` : "";
+  return advance(
+    "habit_action",
+    dataPatch,
+    `좋아요. "${habitAction}"로 잡을게요.${amountNote}\n\n며칠 동안 실험해볼까요? 7일, 14일, 28일 중 선택해주세요.`,
+  );
+}
+
+function isMetaHabitActionReply(text: string) {
+  return /(추천|해줘|그렇게|그걸로|모르겠|아무거나|예시|다시|너무|넓|구체)/.test(text);
+}
+
+function normalizeDeterministicHabitAction(text: string) {
+  const weightTraining = normalizeWeightTrainingAction(text);
+  if (weightTraining) return weightTraining;
+
+  return text
+    .replace(/\s+/g, " ")
+    .replace(/하려고$/, "하기")
+    .replace(/할거야$/, "하기")
+    .replace(/할 거야$/, "하기")
+    .replace(/운동할거야$/, "운동하기")
+    .replace(/운동할 거야$/, "운동하기")
+    .replace(/헬스장 가서/g, "헬스장에서")
+    .replace(/(\d+\s*종목)하기/g, "$1 하기")
+    .trim();
+}
+
+function normalizeWeightTrainingAction(text: string) {
+  if (!/(웨이트|근력)/.test(text)) return null;
+
+  const location = /헬스장/.test(text) ? "헬스장에서 " : "";
+  const count = text.match(/\d+\s*종목/)?.[0] ?? "";
+  const time = text.match(/\d+\s*(?:분|시간)/)?.[0] ?? "";
+  const details = [count, time].filter(Boolean).join(" ");
+  return `${location}웨이트${details ? ` ${details}` : ""} 하기`;
+}
+
+function extractHabitAmount(text: string) {
+  const amounts = text.match(/\d+\s*(?:분|시간|회|세트|종목|km|킬로|쪽|문제|개|장|줄)/g) ?? [];
+  return amounts.join(", ");
 }
 
 async function normalizeControllerResponse(
