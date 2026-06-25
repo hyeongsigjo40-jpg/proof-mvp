@@ -68,6 +68,13 @@ type HabitActionReviewResult = {
   reason: string;
 };
 
+type ElasticLevelReviewResult = {
+  decision: "save" | "revise_step" | "ask_clarifying_question";
+  task: string | null;
+  reply: string;
+  reason: string;
+};
+
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 const model = process.env.OPENAI_MODEL || "gpt-5.4-mini";
 
@@ -233,7 +240,7 @@ async function routeCorrection(
         content:
           "너는 Proof 온보딩의 correction router다. 사용자의 최신 발화가 현재 단계 답변인지, 이전에 수집한 필드를 바꾸려는 정정인지, 애매한지 분류한다.\n\n" +
           "[whole_process]\n목표 영역→바꾸고 싶은 이유→정체성 문장→실패 상황→감정/생각→SMART 습관→Mini/Plus/Elite 순서로 진행한다.\n\n" +
-          "[important]\n- 사용자가 현재 질문에 답하고 있으면 answer_current_step이다.\n- 사용자가 이전 답변을 바꾸고 있으면 correct_previous_field다.\n- correct_previous_field는 target_field가 current_step보다 이전 필드일 때만 사용한다.\n- 사용자가 '연애를 못할 것 같은 열등감 때문에'라고 말하는 것은 goal_why 답변이지 lifeArea correction이 아니다.\n- 사용자가 '연애로 할까', '프로젝트 말고 연애', '삶의 영역은 연애로'라고 말하면 lifeArea correction이다.\n- 사용자가 '기간은 4주로 바꿀래'라고 말하면 habitPeriod correction이다.\n- 사용자가 'Mini는 1문제만으로'라고 말하면 miniTask correction이다.\n- 확신이 낮으면 unclear로 둔다.",
+          "[important]\n- 사용자가 현재 질문에 답하고 있으면 answer_current_step이다.\n- 사용자가 이전 답변을 바꾸고 있으면 correct_previous_field다.\n- correct_previous_field는 target_field가 current_step보다 이전 필드일 때만 사용한다.\n- 사용자가 '연애를 못할 것 같은 열등감 때문에'라고 말하는 것은 goal_why 답변이지 lifeArea correction이 아니다.\n- 사용자가 '스마트폰 사용 습관을 줄이고 독서를 하고 싶다, 이렇게 잡을게요'처럼 목표/영역을 다시 정하면 lifeArea correction이다. whyChange로 저장하지 않는다.\n- 사용자가 '아니 그건 이유가 아니라 목표였잖아요', '이유가 잘못 들어갔다'처럼 특정 필드가 틀렸다고만 말하면 correct_previous_field로 분류하고 target_field를 해당 필드로 둔다. 새 값이 없으면 value=null이다.\n- 사용자가 '연애로 할까', '프로젝트 말고 연애', '삶의 영역은 연애로'라고 말하면 lifeArea correction이다.\n- 사용자가 '기간은 4주로 바꿀래'라고 말하면 habitPeriod correction이다.\n- 사용자가 'Mini는 1문제만으로'라고 말하면 miniTask correction이다.\n- 확신이 낮으면 unclear로 둔다.",
       },
       {
         role: "user",
@@ -283,12 +290,22 @@ async function correctionFromRouter(
   routed: CorrectionRouterResult,
 ): Promise<OnboardingControllerResponse | null> {
   if (routed.intent !== "correct_previous_field") return null;
-  if (!routed.target_field || !routed.value?.trim()) return null;
+  if (!routed.target_field) return null;
   if (routed.confidence < 0.72) return null;
   if (routed.target_field === currentFieldByStep[body.current_step]) return null;
   if (!isPreviousField(routed.target_field, body.current_step)) return null;
 
-  const value = routed.value.trim();
+  const value = routed.value?.trim() ?? "";
+  if (!value) {
+    return {
+      intent: "correction",
+      should_advance: true,
+      next_step: fieldStep[routed.target_field],
+      data_patch: [{ field: routed.target_field, value: "" }],
+      reply: `${fieldLabel[routed.target_field]}을 다시 잡을게요. ${currentQuestion(fieldStep[routed.target_field], body.data)}`,
+    };
+  }
+
   if (routed.target_field === "habitAction") {
     const review = await reviewHabitAction(client, body, value);
     if (review.decision !== "save") {
@@ -430,6 +447,9 @@ async function normalizeControllerResponse(
   body: OnboardingControllerRequest,
   result: OnboardingControllerResponse,
 ): Promise<OnboardingControllerResponse> {
+  if (body.current_step === "mini" || body.current_step === "plus" || body.current_step === "elite") {
+    return normalizeElasticLevelResponse(client, body, result);
+  }
   if (body.current_step !== "habit_action") return result;
 
   const habitActionPatch = result.data_patch.find((patch) => patch.field === "habitAction");
@@ -451,6 +471,98 @@ async function normalizeControllerResponse(
       patch.field === "habitAction" && review.habit_action ? { ...patch, value: review.habit_action } : patch,
     ),
   };
+}
+
+async function normalizeElasticLevelResponse(
+  client: OpenAI,
+  body: OnboardingControllerRequest,
+  result: OnboardingControllerResponse,
+): Promise<OnboardingControllerResponse> {
+  const targetField = currentFieldByStep[body.current_step];
+  if (!targetField) return result;
+  const taskPatch = result.data_patch.find((patch) => patch.field === targetField);
+  if (!taskPatch) return result;
+
+  const review = await reviewElasticLevelTask(client, body, body.current_step as ElasticLevelStep, taskPatch.value);
+  if (review.decision !== "save") {
+    return stay(body.current_step, {}, review.reply);
+  }
+
+  return {
+    ...result,
+    data_patch: result.data_patch.map((patch) =>
+      patch.field === targetField && review.task ? { ...patch, value: review.task } : patch,
+    ),
+  };
+}
+
+type ElasticLevelStep = "mini" | "plus" | "elite";
+
+async function reviewElasticLevelTask(
+  client: OpenAI,
+  body: OnboardingControllerRequest,
+  level: ElasticLevelStep,
+  proposedTask: string,
+): Promise<ElasticLevelReviewResult> {
+  const response = await client.responses.create({
+    model,
+    input: [
+      {
+        role: "system",
+        content:
+          buildProofSystemPrompt(
+            "Elastic Habit 레벨 검토자",
+            "현재 호출은 elastic_level_quality_gate다. 목적은 Mini/Plus/Elite 후보가 각 레벨의 의미에 맞는지 검토하는 것이다.",
+          ) +
+          "\n\n[level_rules]\n" +
+          "- Mini는 가장 힘든 날에도 가능한 최소 증거다. 원래 습관 목표와 같은 양이면 저장하지 않는다. 너무 작아 보여야 정상이다.\n" +
+          "- Plus는 보통 날의 기본 성공 단위다. 보통 원래 습관 목표와 같거나 살짝 낮은 수준이다.\n" +
+          "- Elite는 여유 있는 날의 확장 단위다. Plus보다 더 크거나 깊어야 한다.\n" +
+          "- 레벨 간 크기 관계가 깨지면 저장하지 않는다. Mini < Plus <= Elite 흐름이 되어야 한다.\n" +
+          "- 사용자가 현재 레벨의 의미를 오해하면 decision='revise_step'으로 두고, 왜 막는지 짧게 설명한 뒤 적절한 예시 2-3개를 제안한다.\n" +
+          "- 애매하면 한 가지 질문만 한다.\n" +
+          "- 저장 가능하면 task에는 군더더기를 제거한 실행 문장만 넣는다.",
+      },
+      {
+        role: "user",
+        content: JSON.stringify({
+          level,
+          proposed_task: proposedTask,
+          habit_action: body.data.habitAction,
+          habit_period: body.data.habitPeriod,
+          habit_frequency: body.data.habitFrequency,
+          habit_when: body.data.habitWhen,
+          habit_amount: body.data.habitAmount,
+          current_tasks: {
+            mini: body.data.miniTask,
+            plus: body.data.plusTask,
+            elite: body.data.eliteTask,
+          },
+          latest_user_answer: body.latest_user_answer,
+          review_question: "이 proposed_task를 현재 level에 저장해도 되는가?",
+        }),
+      },
+    ],
+    text: {
+      format: {
+        type: "json_schema",
+        name: "elastic_level_review",
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          required: ["decision", "task", "reply", "reason"],
+          properties: {
+            decision: { type: "string", enum: ["save", "revise_step", "ask_clarifying_question"] },
+            task: { type: ["string", "null"] },
+            reply: { type: "string" },
+            reason: { type: "string" },
+          },
+        },
+      },
+    },
+  });
+
+  return JSON.parse(response.output_text) as ElasticLevelReviewResult;
 }
 
 async function reviewHabitAction(

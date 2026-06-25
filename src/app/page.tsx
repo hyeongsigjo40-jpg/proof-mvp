@@ -158,7 +158,7 @@ const elasticLevelLabels: Record<ElasticLevel, string> = {
 };
 
 const MINI_OPENING = (habitAction: string) =>
-  `좋아요. 이제 "${habitAction}"을 Mini / Plus / Elite로 나눌게요.\n목표는 매일 완벽하게 해내는 게 아니라, 컨디션이 낮은 날에도 완전히 실패한 날이 되지 않게 만드는 거예요.\n\nMini는 가장 힘든 날에도 남길 수 있는 최소 증거입니다. 너무 쉬워 보여도 괜찮아요. "${habitAction}"을 기준으로 Mini는 어떻게 설정할까요?`;
+  `좋아요. 이제 "${habitAction}"을 Mini / Plus / Elite로 나눌게요.\n목표는 매번 완벽하게 해내는 게 아니라, 컨디션이 낮은 날에도 완전히 실패한 날이 되지 않게 만드는 거예요.\n\nMini는 전체 목표를 그대로 하는 게 아니라, 가장 힘든 날에도 남길 수 있는 최소 증거입니다. 예를 들어 목표가 책 30쪽 읽기라면 Mini는 30쪽이 아니라 책 펼치기, 1쪽 읽기, 3문장 읽기처럼 훨씬 작아야 해요.\n\n너무 쉬워 보여도 괜찮습니다. 이 기준이 있어야 실패한 날에도 기록이 남고, 다음 날 다시 이어갈 수 있어요. "${habitAction}"을 기준으로 Mini는 어디까지 낮추면 좋을까요?`;
 
 const initialMessages: Message[] = [];
 const DEBUG_SESSION_KEY = "proof-elastic-debug-session";
@@ -329,9 +329,9 @@ export default function Home() {
       setStep(result.next_step);
     }
     setGoalData({
-      lifeArea: nextData.lifeArea || goalData.lifeArea,
-      whyChange: nextData.whyChange || goalData.whyChange,
-      identityStatement: nextData.goalIdentityStatement || goalData.identityStatement,
+      lifeArea: nextData.lifeArea,
+      whyChange: nextData.whyChange,
+      identityStatement: nextData.goalIdentityStatement,
     });
     setPending(false);
   }
@@ -1582,7 +1582,36 @@ function applyOnboardingPatch(
   data: OnboardingData,
   dataPatch: OnboardingControllerResult["data_patch"],
 ): OnboardingData {
-  return dataPatch.reduce((next, item) => ({ ...next, [item.field]: item.value }), data);
+  return dataPatch.reduce((next, item) => clearDependentOnboardingFields({ ...next, [item.field]: item.value }, item.field), data);
+}
+
+const onboardingFieldOrder: (keyof OnboardingData)[] = [
+  "lifeArea",
+  "whyChange",
+  "goalIdentityStatement",
+  "failureSituation",
+  "failureFeeling",
+  "habitAction",
+  "habitPeriod",
+  "habitFrequency",
+  "habitWhen",
+  "habitAmount",
+  "miniTask",
+  "plusTask",
+  "eliteTask",
+];
+
+function clearDependentOnboardingFields(data: OnboardingData, changedField: keyof OnboardingData): OnboardingData {
+  const changedIndex = onboardingFieldOrder.indexOf(changedField);
+  if (changedIndex < 0) return data;
+
+  return onboardingFieldOrder.slice(changedIndex + 1).reduce(
+    (next, field) => ({
+      ...next,
+      [field]: "",
+    }),
+    data,
+  );
 }
 
 function toOnboardingPatch(dataPatch: Partial<OnboardingData>): OnboardingControllerResult["data_patch"] {

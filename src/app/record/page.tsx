@@ -38,6 +38,8 @@ function RecordNotebook() {
   const { loading, userId, error } = useProofSession();
   const searchParams = useSearchParams();
   const selectedDate = searchParams.get("date");
+  const selectedView = searchParams.get("view");
+  const showingScorecard = selectedView === "scorecard";
   const scope = searchParams.get("scope") || LIVE_ELASTIC_SCOPE;
   const trackerHref = scope === LIVE_ELASTIC_SCOPE ? "/" : `/?debug=1&scope=${encodeURIComponent(scope)}`;
   const [checkIns, setCheckIns] = useState<ElasticCheckIn[]>([]);
@@ -97,52 +99,18 @@ function RecordNotebook() {
           </Link>
         </section>
       ) : (
-        <>
-          <section className="elastic-scorecard record-scorecard" aria-label="월간 스코어카드">
-            <div className="scorecard-title">Scorecard</div>
-            <div className="scorecard-columns">
-              <section>
-                <span>Counts</span>
-                <div className="score-counts">
-                  <strong className="mini-count">Mini {scorecard.mini}</strong>
-                  <strong className="plus-count">Plus {scorecard.plus}</strong>
-                  <strong className="elite-count">Elite {scorecard.elite}</strong>
-                </div>
-              </section>
-              <section>
-                <span>Base Scores</span>
-                <p>
-                  {scorecard.mini} + ({scorecard.plus} x 2) + ({scorecard.elite} x 3) = <strong>{scorecard.baseScore}</strong>
-                </p>
-              </section>
-              <section>
-                <span>Bonuses</span>
-                {scorecard.bonuses.length ? (
-                  <ul>
-                    {scorecard.bonuses.map((item) => (
-                      <li key={item.label}>
-                        {item.label} +{item.points}
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p>아직 없음</p>
-                )}
-              </section>
-              <section>
-                <span>Total Score</span>
-                <p>
-                  {scorecard.baseScore} + {scorecard.bonusScore} = <strong>{scorecard.totalScore}</strong>
-                </p>
-              </section>
-            </div>
-          </section>
-
           <section className="record-notebook">
             <aside className="record-date-list" aria-label="날짜별 습관 기록">
+              <Link
+                className={showingScorecard ? "record-date-row active" : "record-date-row"}
+                href={`/record?view=scorecard&scope=${encodeURIComponent(scope)}`}
+              >
+                <span>Scorecard</span>
+                <strong className="status-chip score">{scorecard.totalScore}점</strong>
+              </Link>
               {sortedCheckIns.map((checkIn) => (
                 <Link
-                  className={checkIn.checkin_date === selectedCheckIn?.checkin_date ? "record-date-row active" : "record-date-row"}
+                  className={!showingScorecard && checkIn.checkin_date === selectedCheckIn?.checkin_date ? "record-date-row active" : "record-date-row"}
                   href={`/record?date=${checkIn.checkin_date}&scope=${encodeURIComponent(scope)}`}
                   key={checkIn.id}
                 >
@@ -152,7 +120,56 @@ function RecordNotebook() {
               ))}
             </aside>
 
-            {selectedCheckIn ? (
+            {showingScorecard ? (
+              <article className="record-note">
+                <header className="record-note-header">
+                  <div>
+                    <p className="eyebrow">Monthly Score</p>
+                    <h2>Scorecard</h2>
+                  </div>
+                  <span className="status-chip score">{scorecard.totalScore}점</span>
+                </header>
+                <section className="elastic-scorecard" aria-label="월간 스코어카드">
+                  <div className="scorecard-title">Scorecard</div>
+                  <div className="scorecard-columns">
+                    <section>
+                      <span>Counts</span>
+                      <div className="score-counts">
+                        <strong className="mini-count">Mini {scorecard.mini}</strong>
+                        <strong className="plus-count">Plus {scorecard.plus}</strong>
+                        <strong className="elite-count">Elite {scorecard.elite}</strong>
+                      </div>
+                    </section>
+                    <section>
+                      <span>Base Scores</span>
+                      <p>
+                        {scorecard.mini} + ({scorecard.plus} x 2) + ({scorecard.elite} x 3) = <strong>{scorecard.baseScore}</strong>
+                      </p>
+                    </section>
+                    <section>
+                      <span>Bonuses</span>
+                      {scorecard.bonuses.length ? (
+                        <ul>
+                          {scorecard.bonuses.map((item) => (
+                            <li key={item.label}>
+                              {item.label} +{item.points}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p>아직 없음</p>
+                      )}
+                    </section>
+                    <section>
+                      <span>Total Score</span>
+                      <p>
+                        {scorecard.baseScore} + {scorecard.bonusScore} = <strong>{scorecard.totalScore}</strong>
+                      </p>
+                    </section>
+                  </div>
+                </section>
+              </article>
+            ) : selectedCheckIn ? (
               <article className="record-note">
                 <header className="record-note-header">
                   <div>
@@ -188,7 +205,6 @@ function RecordNotebook() {
               </article>
             ) : null}
           </section>
-        </>
       )}
     </main>
   );

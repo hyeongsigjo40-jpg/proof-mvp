@@ -540,6 +540,11 @@ blockquote {
   color: #d93030;
 }
 
+.status-chip.score {
+  background: rgba(49, 91, 76, 0.12);
+  color: var(--primary);
+}
+
 .record-notebook-page {
   max-width: 1180px;
 }
@@ -972,11 +977,6 @@ blockquote {
   border: 1px solid var(--line);
   border-radius: 8px;
   overflow: hidden;
-}
-
-.record-scorecard {
-  box-shadow: var(--shadow);
-  margin-top: 20px;
 }
 
 .scorecard-title {
