@@ -1546,9 +1546,15 @@ blockquote {
   color: var(--primary);
 }
 
-.goal-complete-composer {
+.goal-complete-composer,
+.elastic-composer {
   display: grid;
   gap: 8px;
+}
+
+.elastic-confirm-btn {
+  font-size: 15px;
+  width: 100%;
 }
 
 .chat-composer {

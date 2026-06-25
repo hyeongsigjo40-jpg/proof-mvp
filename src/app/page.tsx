@@ -393,32 +393,24 @@ export default function Home() {
   }
 
   function handleElasticLevelAnswer(level: ElasticLevel, text: string) {
-    const field = `${level}Task` as const;
-    const currentTask = data[field];
-
-    if (isConfirmingAnswer(text)) {
-      if (!currentTask) {
-        assistant(`확정할 ${elasticLevelLabels[level]}가 아직 없어요. 먼저 ${elasticLevelLabels[level]} 기준을 말해주세요.`);
-        return;
-      }
-
-      const next = nextElasticLevelStep(level);
-      if (next) {
-        setStep(next);
-        assistant(`${elasticLevelLabels[level]}는 "${currentTask}"로 확정할게요.\n\n${levelOpeningQuestion(next)}`);
-      } else {
-        setStep("complete");
-        void completeOnboardingWithLevel("elite", currentTask);
-      }
-      return;
-    }
-
     const candidate = normalizeLevelCandidate(level, text);
-    setData((current) => ({ ...current, [field]: candidate }));
+    setData((current) => ({ ...current, [`${level}Task`]: candidate }));
     if (level === "mini") setNextMini(candidate);
     if (level === "plus") setNextPlus(candidate);
     if (level === "elite") setNextElite(candidate);
-    assistant(createLevelConfirmationMessage(level, candidate));
+    assistant(createLevelEchoMessage(level, candidate));
+  }
+
+  function confirmElasticLevel(level: ElasticLevel) {
+    const task = data[`${level}Task`];
+    if (!task) return;
+    const next = nextElasticLevelStep(level);
+    if (next) {
+      setStep(next);
+      assistant(levelOpeningQuestion(next));
+    } else {
+      void completeOnboardingWithLevel("elite", task);
+    }
   }
 
   async function completeOnboardingWithLevel(level: ElasticLevel, task: string) {
@@ -454,6 +446,9 @@ export default function Home() {
     if (step === "goal_complete") {
       setStep("mini");
       showMiniOpening(data.habitAction || "이 습관");
+    }
+    if (step === "mini" || step === "plus" || step === "elite") {
+      confirmElasticLevel(step);
     }
   }
 
@@ -1144,6 +1139,7 @@ export default function Home() {
 
             {mode === "onboarding" ? (
               <OnboardingComposer
+                data={data}
                 input={input}
                 setInput={setInput}
                 step={step}
@@ -1434,6 +1430,7 @@ function OnboardingDebugPanel({
 }
 
 function OnboardingComposer({
+  data,
   input,
   onContinue,
   onSubmit,
@@ -1441,6 +1438,7 @@ function OnboardingComposer({
   setInput,
   step,
 }: {
+  data: OnboardingData;
   input: string;
   onContinue: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
@@ -1503,22 +1501,33 @@ function OnboardingComposer({
     );
   }
 
+  const isElasticStep = step === "mini" || step === "plus" || step === "elite";
+  const levelLabel = step === "mini" ? "Mini" : step === "plus" ? "Plus" : step === "elite" ? "Elite" : "";
+  const levelValue = step === "mini" ? data.miniTask : step === "plus" ? data.plusTask : step === "elite" ? data.eliteTask : "";
+
   return (
-    <form className="chat-composer" onSubmit={onSubmit}>
-      <textarea
-        aria-label="온보딩 답변"
-        disabled={step === "complete" || pending}
-        onChange={(event) => setInput(event.target.value)}
-        onKeyDown={handleKeyDown}
-        placeholder={pending ? "Proof가 생각하는 중…" : step === "complete" ? "온보딩 완료" : "답변을 입력하세요"}
-        ref={textareaRef}
-        rows={1}
-        value={input}
-      />
-      <button aria-label="보내기" disabled={step === "complete" || pending} type="submit">
-        <ArrowUp size={18} aria-hidden="true" />
-      </button>
-    </form>
+    <div className="elastic-composer">
+      <form className="chat-composer" onSubmit={onSubmit}>
+        <textarea
+          aria-label="온보딩 답변"
+          disabled={step === "complete" || pending}
+          onChange={(event) => setInput(event.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder={pending ? "Proof가 생각하는 중…" : step === "complete" ? "온보딩 완료" : isElasticStep ? `${levelLabel} 기준을 입력하세요` : "답변을 입력하세요"}
+          ref={textareaRef}
+          rows={1}
+          value={input}
+        />
+        <button aria-label="보내기" disabled={step === "complete" || pending} type="submit">
+          <ArrowUp size={18} aria-hidden="true" />
+        </button>
+      </form>
+      {isElasticStep && levelValue && (
+        <button className="primary-button elastic-confirm-btn" disabled={pending} onClick={onContinue} type="button">
+          {levelLabel} 확정 — {levelValue}
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -1824,9 +1833,9 @@ function levelOpeningQuestion(level: ElasticLevel) {
   return "이제 Elite는 여유 있는 날의 확장 목표예요. 컨디션이 좋은 날에는 어디까지 해볼까요?";
 }
 
-function createLevelConfirmationMessage(level: ElasticLevel, candidate: string) {
+function createLevelEchoMessage(level: ElasticLevel, candidate: string) {
   const label = elasticLevelLabels[level];
-  return `좋아요. ${label} 후보는 "${candidate}"로 볼게요.\n\n${levelDescription(level)}\n\n"${candidate}"로 확정하시겠어요? 바꾸고 싶으면 새 ${label}를 다시 말해주세요.`;
+  return `${label}: "${candidate}"\n\n${levelDescription(level)}\n\n다른 기준으로 바꾸고 싶으면 다시 입력하세요.`;
 }
 
 function levelDescription(level: ElasticLevel) {
