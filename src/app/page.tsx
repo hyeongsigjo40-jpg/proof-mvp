@@ -133,6 +133,10 @@ const emptyOnboarding: OnboardingData = {
 
 const emptyGoalData: GoalData = { lifeArea: "", whyChange: "", identityStatement: "" };
 
+const SERVICE_INTRO =
+  "Proof는 목표를 세우는 데서 끝나지 않고, 실제 행동으로 이어지도록 돕는 변화 기록 서비스예요.\n원하는 변화가 왜 자주 막히는지 함께 살펴보고, 매일 남길 수 있는 작은 증거를 쌓아가며 나에게 맞는 실행 방식을 찾아갑니다.";
+const ONBOARDING_INTRO =
+  "먼저 대화를 통해 옆에 있는 목표와 패턴을 함께 채워볼게요.\n바꾸고 싶은 방향, 반복해서 막히는 상황, 그때의 생각과 감정을 정리한 뒤 바로 실행할 수 있는 작은 습관으로 바꿉니다. 이후에는 매일 체크인으로 성공과 실패를 평가가 아니라 데이터로 기록해 다음 행동을 조정해요.";
 const GOAL_AREA_QUESTION =
   "요즘 가장 바꾸고 싶은 삶의 영역은 무엇인가요?\n공부, 운동, 수면, 일, 감정관리, 인간관계 중 어디에 가까운지 자유롭게 말해주세요.";
 const HABIT_ACTION_OPENING =
@@ -241,7 +245,7 @@ export default function Home() {
         setStep("complete");
       } else {
         resetOnboardingState();
-        assistant(GOAL_AREA_QUESTION);
+        showOnboardingOpening();
       }
 
       setCheckIns(checkIns);
@@ -683,7 +687,7 @@ export default function Home() {
   async function resetDebugConversation() {
     resetOnboardingState();
     setDebugEvents([]);
-    assistant(GOAL_AREA_QUESTION);
+    showOnboardingOpening();
   }
 
   function jumpToStep(target: OnboardingStep) {
@@ -784,6 +788,14 @@ export default function Home() {
 
   function assistant(text: string) {
     setMessages((current) => [...current, { role: "assistant", text }]);
+  }
+
+  function showOnboardingOpening() {
+    setMessages([
+      { role: "assistant", text: SERVICE_INTRO },
+      { role: "assistant", text: ONBOARDING_INTRO },
+      { role: "assistant", text: GOAL_AREA_QUESTION },
+    ]);
   }
 
   if (loading) return <LoadingState />;
