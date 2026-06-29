@@ -6,6 +6,7 @@ import type { ElasticCheckIn, ElasticCheckInStatus, ElasticProfile } from "@/lib
 
 const PROFILE_KEY = "proof-elastic-profile";
 const CHECKINS_KEY = "proof-elastic-checkins";
+const SESSION_DRAFT_KEY = "proof-elastic-session-draft";
 export const LIVE_ELASTIC_SCOPE = "live";
 
 export type ElasticProfileInput = Omit<ElasticProfile, "updated_at">;
@@ -34,8 +35,71 @@ function writeLocalCheckIns(checkIns: ElasticCheckIn[]) {
   window.localStorage.setItem(CHECKINS_KEY, JSON.stringify(checkIns));
 }
 
+function sessionDraftKey(userId: string, scope: string) {
+  return `${SESSION_DRAFT_KEY}:${userId}:${encodeURIComponent(scope)}`;
+}
+
+function readLocalSessionDraft<T>(userId: string, scope: string): T | null {
+  if (typeof window === "undefined") return null;
+  const raw = window.localStorage.getItem(sessionDraftKey(userId, scope));
+  if (!raw) return null;
+
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+function writeLocalSessionDraft(userId: string, scope: string, draft: unknown) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(sessionDraftKey(userId, scope), JSON.stringify(draft));
+}
+
+function removeLocalSessionDraft(userId: string, scope: string) {
+  if (typeof window === "undefined") return;
+  window.localStorage.removeItem(sessionDraftKey(userId, scope));
+}
+
 function isMissingScopeColumn(error: { message?: string; code?: string } | null) {
   return error?.code === "42703" || error?.message?.includes("scope");
+}
+
+function isMissingDraftStateColumn(error: { message?: string; code?: string } | null) {
+  return error?.code === "42703" || error?.message?.includes("draft_state");
+}
+
+function getDraftUpdatedAt(draft: unknown) {
+  if (!draft || typeof draft !== "object" || !("updatedAt" in draft)) return 0;
+  const updatedAt = (draft as { updatedAt?: unknown }).updatedAt;
+  return typeof updatedAt === "string" ? Date.parse(updatedAt) || 0 : 0;
+}
+
+function getLatestDraft<T>(localDraft: T | null, remoteDraft: T | null) {
+  if (!localDraft) return remoteDraft;
+  if (!remoteDraft) return localDraft;
+  return getDraftUpdatedAt(remoteDraft) > getDraftUpdatedAt(localDraft) ? remoteDraft : localDraft;
+}
+
+function createDraftProfileInsert(userId: string, scope: string, draft: unknown) {
+  return {
+    user_id: userId,
+    scope,
+    habit_name: "",
+    identity_motive: "",
+    motive_summary: null,
+    recent_failure_date: null,
+    pre_breakdown_feeling: null,
+    actual_breakdown_behavior: null,
+    recovery_method: null,
+    mini_task: "",
+    plus_task: "",
+    elite_task: "",
+    monthly_vision: null,
+    onboarding_completed_at: null,
+    draft_state: draft,
+    updated_at: new Date().toISOString(),
+  };
 }
 
 export async function getElasticProfile(userId: string, scope = LIVE_ELASTIC_SCOPE) {
@@ -57,6 +121,86 @@ export async function getElasticProfile(userId: string, scope = LIVE_ELASTIC_SCO
   }
   if (error) throw error;
   return data as ElasticProfile | null;
+}
+
+export function cacheElasticSessionDraft(userId: string, scope: string, draft: unknown) {
+  writeLocalSessionDraft(userId, scope, draft);
+}
+
+export async function getElasticSessionDraft<T>(userId: string, scope = LIVE_ELASTIC_SCOPE) {
+  const localDraft = readLocalSessionDraft<T>(userId, scope);
+  if (!hasSupabaseConfig || !supabase) {
+    return localDraft;
+  }
+
+  const { data, error } = await supabase
+    .from("elastic_profiles")
+    .select("draft_state")
+    .eq("user_id", userId)
+    .eq("scope", scope)
+    .maybeSingle();
+  if (isMissingScopeColumn(error) && scope === LIVE_ELASTIC_SCOPE) {
+    const legacy = await supabase.from("elastic_profiles").select("draft_state").eq("user_id", userId).maybeSingle();
+    if (isMissingDraftStateColumn(legacy.error)) return localDraft;
+    if (legacy.error) return localDraft;
+    return getLatestDraft(localDraft, ((legacy.data as { draft_state?: T } | null)?.draft_state ?? null) as T | null);
+  }
+  if (isMissingDraftStateColumn(error)) return localDraft;
+  if (error) return localDraft;
+
+  return getLatestDraft(localDraft, ((data as { draft_state?: T } | null)?.draft_state ?? null) as T | null);
+}
+
+export async function saveElasticSessionDraft(userId: string, scope: string, draft: unknown) {
+  writeLocalSessionDraft(userId, scope, draft);
+  if (!hasSupabaseConfig || !supabase) return;
+
+  const patch = { draft_state: draft, updated_at: new Date().toISOString() };
+  const update = await supabase
+    .from("elastic_profiles")
+    .update(patch)
+    .eq("user_id", userId)
+    .eq("scope", scope)
+    .select("user_id");
+
+  if (isMissingScopeColumn(update.error) && scope === LIVE_ELASTIC_SCOPE) {
+    const legacy = await supabase
+      .from("elastic_profiles")
+      .update(patch)
+      .eq("user_id", userId)
+      .select("user_id");
+    if (isMissingDraftStateColumn(legacy.error) || legacy.error || (legacy.data?.length ?? 0) > 0) return;
+
+    const { scope: _scope, ...legacyRow } = createDraftProfileInsert(userId, scope, draft);
+    await supabase.from("elastic_profiles").insert(legacyRow);
+    return;
+  }
+
+  if (isMissingDraftStateColumn(update.error) || update.error || (update.data?.length ?? 0) > 0) return;
+
+  const insert = await supabase.from("elastic_profiles").insert(createDraftProfileInsert(userId, scope, draft));
+  if (insert.error?.code === "23505") {
+    await supabase
+      .from("elastic_profiles")
+      .update(patch)
+      .eq("user_id", userId)
+      .eq("scope", scope);
+  }
+}
+
+export async function clearElasticSessionDraft(userId: string, scope: string) {
+  removeLocalSessionDraft(userId, scope);
+  if (!hasSupabaseConfig || !supabase) return;
+
+  const patch = { draft_state: null, updated_at: new Date().toISOString() };
+  const update = await supabase
+    .from("elastic_profiles")
+    .update(patch)
+    .eq("user_id", userId)
+    .eq("scope", scope);
+  if (isMissingScopeColumn(update.error) && scope === LIVE_ELASTIC_SCOPE) {
+    await supabase.from("elastic_profiles").update(patch).eq("user_id", userId);
+  }
 }
 
 export async function saveElasticProfile(input: ElasticProfileInput) {
@@ -214,6 +358,8 @@ export async function updateOnboardingStep(userId: string, step: string, scope =
 }
 
 export async function deleteElasticScope(userId: string, scope: string) {
+  removeLocalSessionDraft(userId, scope);
+
   if (!hasSupabaseConfig || !supabase) {
     const profile = readLocalProfile();
     if (profile?.user_id === userId && (profile.scope ?? LIVE_ELASTIC_SCOPE) === scope) {

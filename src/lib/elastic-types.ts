@@ -24,6 +24,7 @@ export type ElasticProfile = {
   elite_task: string;
   monthly_vision: string | null;
   last_onboarding_step: string | null;
+  draft_state?: unknown | null;
   onboarding_completed_at: string | null;
   updated_at: string;
 };

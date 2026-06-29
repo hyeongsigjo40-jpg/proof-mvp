@@ -7,14 +7,17 @@ import { AuthPanel } from "@/components/AuthPanel";
 import { LoadingState } from "@/components/LoadingState";
 import { todayKey } from "@/lib/date";
 import {
+  cacheElasticSessionDraft,
+  clearElasticSessionDraft,
   deleteElasticScope,
   getElasticCheckIns,
   getElasticProfile,
+  getElasticSessionDraft,
   LIVE_ELASTIC_SCOPE,
   saveElasticCheckIn,
   saveElasticProfile,
+  saveElasticSessionDraft,
   updateElasticTasks,
-  updateOnboardingStep,
 } from "@/lib/elastic-store";
 import type { ElasticCheckIn, ElasticCheckInStatus, ElasticProfile } from "@/lib/elastic-types";
 import { useProofSession } from "@/lib/use-proof-session";
@@ -118,6 +121,30 @@ type DailyRecord = {
   day: number;
   dateKey: string;
   status: CheckInStatus;
+};
+
+type HomeSessionDraft = {
+  version: 1;
+  userId: string;
+  scope: string;
+  activeCheckInDate: string;
+  mode: "onboarding" | "daily";
+  step: OnboardingStep;
+  goalData: GoalData;
+  data: OnboardingData;
+  messages: Message[];
+  input: string;
+  selectedCheckIn: CheckInStatus | null;
+  blockerReason: BlockerReason | null;
+  memo: string;
+  patternInput: string;
+  dailyPatternTurns: DailyPatternTurn[];
+  dailyStage: DailyStage;
+  pendingTaskPatch: HabitTaskPatch | null;
+  nextMini: string;
+  nextPlus: string;
+  nextElite: string;
+  updatedAt: string;
 };
 
 const emptyOnboarding: OnboardingData = {
@@ -249,67 +276,141 @@ export default function Home() {
   const [debugSessionId, setDebugSessionId] = useState(() => (debugEnabled ? readDebugSessionId() : ""));
   const [debugEvents, setDebugEvents] = useState<OnboardingDebugEvent[]>([]);
   const [goalExpanded, setGoalExpanded] = useState(false);
+  const [draftHydrationId, setDraftHydrationId] = useState(0);
   const chatLogRef = useRef<HTMLDivElement | null>(null);
+  const loadedDraftIdentityRef = useRef<string | null>(null);
   const storageScope = debugEnabled ? `debug:${debugSessionId}` : LIVE_ELASTIC_SCOPE;
   const activeCheckInDate = debugEnabled ? debugCheckInDate : todayKey();
+  const draftIdentity = userId ? `${userId}:${storageScope}:${activeCheckInDate}` : "";
+
+  function markDraftHydrated() {
+    loadedDraftIdentityRef.current = draftIdentity;
+    setDraftHydrationId((current) => current + 1);
+  }
+
+  function hydrateFromDraft(draft: HomeSessionDraft, loadedCheckIns: ElasticCheckIn[], fallbackData?: OnboardingData) {
+    const nextData = fallbackData ? mergeOnboardingData(draft.data, fallbackData) : draft.data;
+    const nextGoalData = fallbackData ? mergeGoalData(draft.goalData, dataToGoalData(fallbackData)) : draft.goalData;
+
+    setMode(draft.mode);
+    setStep(draft.step);
+    setGoalData(nextGoalData);
+    setData(nextData);
+    setRecords(createMonthRecords(loadedCheckIns, activeCheckInDate));
+    setCheckIns(loadedCheckIns);
+    setMessages(draft.messages);
+    setInput(draft.input);
+    setSelectedCheckIn(draft.selectedCheckIn);
+    setBlockerReason(draft.blockerReason);
+    setMemo(draft.memo);
+    setPatternInput(draft.patternInput);
+    setDailyPatternTurns(draft.dailyPatternTurns);
+    setDailyStage(draft.dailyStage);
+    setPendingTaskPatch(draft.pendingTaskPatch);
+    setNextMini(draft.nextMini || nextData.miniTask);
+    setNextPlus(draft.nextPlus || nextData.plusTask);
+    setNextElite(draft.nextElite || nextData.eliteTask);
+    setPending(false);
+    setSaveMessage(null);
+  }
 
   useEffect(() => {
+    let cancelled = false;
+    loadedDraftIdentityRef.current = null;
+
     async function load() {
       if (!userId) return;
 
-      const [profile, checkIns] = await Promise.all([
+      const [profile, loadedCheckIns, rawDraft] = await Promise.all([
         getElasticProfile(userId, storageScope),
         getElasticCheckIns(userId, storageScope),
+        getElasticSessionDraft<HomeSessionDraft>(userId, storageScope),
       ]);
+      if (cancelled) return;
+
+      const draft = normalizeHomeSessionDraft(rawDraft, userId, storageScope);
+      setCheckIns(loadedCheckIns);
+      setRecords(createMonthRecords(loadedCheckIns, activeCheckInDate));
+
       if (profile?.onboarding_completed_at) {
         const nextData = mapProfileToData(profile);
+        const nextGoalData = mapProfileToGoalData(profile);
+        const dailyDraft = draft?.mode === "daily" && draft.activeCheckInDate === activeCheckInDate ? draft : null;
+        if (dailyDraft) {
+          hydrateFromDraft(dailyDraft, loadedCheckIns, nextData);
+          markDraftHydrated();
+          return;
+        }
+
         setData(nextData);
-        setGoalData(mapProfileToGoalData(profile));
+        setGoalData(nextGoalData);
         setNextMini(nextData.miniTask);
         setNextPlus(nextData.plusTask);
         setNextElite(nextData.eliteTask);
         setMode("daily");
         setStep("complete");
+      } else if (draft?.mode === "onboarding") {
+        hydrateFromDraft(draft, loadedCheckIns);
+        markDraftHydrated();
+        return;
       } else {
         resetOnboardingState();
         showOnboardingOpening();
       }
 
-      setCheckIns(checkIns);
-      setRecords(createMonthRecords(checkIns, activeCheckInDate));
-      const today = checkIns.find((checkIn) => checkIn.checkin_date === activeCheckInDate);
+      const today = loadedCheckIns.find((checkIn) => checkIn.checkin_date === activeCheckInDate);
       if (today) {
         const parsedMemo = parsePatternMemo(today.memo);
+        const savedChatLog = readChatLogFromMemo(today.memo);
         setSelectedCheckIn(today.result);
         setBlockerReason(parsedMemo.blockerReason);
         setMemo(today.memo ?? "");
+        setInput("");
+        setPatternInput("");
         setDailyPatternTurns(parsedMemo.turns);
         setDailyStage("done");
-        setMessages([
-          ...buildDailyConversationMessages(checkIns, activeCheckInDate),
-          {
-            role: "assistant",
-            text: `${formatDateLabel(activeCheckInDate)} 기록은 이미 ${statusMeta[today.result].label}로 저장되어 있어요.\n필요하면 아래에서 오늘 기록을 수정할 수 있습니다.`,
-          },
-        ]);
+        setPendingTaskPatch(null);
+        setPending(false);
+        setSaveMessage(null);
+        setMessages(
+          savedChatLog.length
+            ? savedChatLog
+            : [
+                ...buildDailyConversationMessages(loadedCheckIns, activeCheckInDate),
+                {
+                  role: "assistant",
+                  text: `${formatDateLabel(activeCheckInDate)} 기록은 이미 ${statusMeta[today.result].label}로 저장되어 있어요.\n필요하면 아래에서 오늘 기록을 수정할 수 있습니다.`,
+                },
+              ],
+        );
       } else if (profile?.onboarding_completed_at) {
         setSelectedCheckIn(null);
         setBlockerReason(null);
         setMemo("");
+        setInput("");
         setDailyPatternTurns([]);
         setPatternInput("");
         setDailyStage("checkin");
+        setPendingTaskPatch(null);
+        setPending(false);
+        setSaveMessage(null);
         setMessages([
-          ...buildDailyConversationMessages(checkIns, activeCheckInDate),
+          ...buildDailyConversationMessages(loadedCheckIns, activeCheckInDate),
           {
             role: "assistant",
             text: `${formatDateLabel(activeCheckInDate)} 체크인을 시작할게요.\n${DAILY_CHECKIN_PROMPT}`,
           },
         ]);
       }
+
+      markDraftHydrated();
     }
 
     void load();
+
+    return () => {
+      cancelled = true;
+    };
   }, [activeCheckInDate, userId, storageScope]);
 
   useEffect(() => {
@@ -322,9 +423,61 @@ export default function Home() {
   }, [messages]);
 
   useEffect(() => {
-    if (!userId || mode !== "onboarding" || step === "complete") return;
-    void updateOnboardingStep(userId, step, storageScope);
-  }, [userId, step, mode, storageScope]);
+    if (!userId || loadedDraftIdentityRef.current !== draftIdentity) return;
+
+    const draft: HomeSessionDraft = {
+      version: 1,
+      userId,
+      scope: storageScope,
+      activeCheckInDate,
+      mode,
+      step,
+      goalData,
+      data,
+      messages: messages.map(sanitizeMessageForStorage),
+      input,
+      selectedCheckIn,
+      blockerReason,
+      memo,
+      patternInput,
+      dailyPatternTurns,
+      dailyStage,
+      pendingTaskPatch,
+      nextMini,
+      nextPlus,
+      nextElite,
+      updatedAt: new Date().toISOString(),
+    };
+
+    cacheElasticSessionDraft(userId, storageScope, draft);
+    const timeout = window.setTimeout(() => {
+      void saveElasticSessionDraft(userId, storageScope, draft);
+    }, 700);
+
+    return () => window.clearTimeout(timeout);
+  }, [
+    activeCheckInDate,
+    blockerReason,
+    dailyPatternTurns,
+    dailyStage,
+    data,
+    draftHydrationId,
+    draftIdentity,
+    goalData,
+    input,
+    memo,
+    messages,
+    mode,
+    nextElite,
+    nextMini,
+    nextPlus,
+    patternInput,
+    pendingTaskPatch,
+    selectedCheckIn,
+    step,
+    storageScope,
+    userId,
+  ]);
 
   const levelCounts = useMemo(
     () => ({
@@ -923,6 +1076,7 @@ export default function Home() {
   async function resetCurrentDebugSession() {
     if (!userId || !debugEnabled) return;
     setPending(true);
+    await clearElasticSessionDraft(userId, storageScope);
     await deleteElasticScope(userId, storageScope);
     await resetDebugConversation();
     setPending(false);
@@ -2306,6 +2460,157 @@ function formatTaskPatch(patch: HabitTaskPatch) {
   if (patch.plusTask) items.push(`${elasticLevelLabels.plus}: ${patch.plusTask}`);
   if (patch.eliteTask) items.push(`${elasticLevelLabels.elite}: ${patch.eliteTask}`);
   return items.join("\n");
+}
+
+function normalizeHomeSessionDraft(raw: unknown, userId: string, scope: string): HomeSessionDraft | null {
+  if (!isRecord(raw) || raw.version !== 1 || raw.userId !== userId || raw.scope !== scope) return null;
+  const mode = raw.mode === "onboarding" || raw.mode === "daily" ? raw.mode : null;
+  if (!mode) return null;
+
+  const step =
+    typeof raw.step === "string" && ALL_STEPS.includes(raw.step as OnboardingStep)
+      ? (raw.step as OnboardingStep)
+      : mode === "daily"
+        ? "complete"
+        : "goal_area";
+  const activeCheckInDate =
+    typeof raw.activeCheckInDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(raw.activeCheckInDate)
+      ? raw.activeCheckInDate
+      : todayKey();
+
+  return {
+    version: 1,
+    userId,
+    scope,
+    activeCheckInDate,
+    mode,
+    step,
+    goalData: normalizeGoalData(raw.goalData),
+    data: normalizeOnboardingData(raw.data),
+    messages: normalizeMessages(raw.messages),
+    input: readString(raw.input),
+    selectedCheckIn: normalizeCheckInStatus(raw.selectedCheckIn),
+    blockerReason: normalizeBlockerReason(raw.blockerReason),
+    memo: readString(raw.memo),
+    patternInput: readString(raw.patternInput),
+    dailyPatternTurns: normalizeDailyPatternTurns(raw.dailyPatternTurns),
+    dailyStage: normalizeDailyStage(raw.dailyStage),
+    pendingTaskPatch: normalizeHabitTaskPatch(raw.pendingTaskPatch),
+    nextMini: readString(raw.nextMini),
+    nextPlus: readString(raw.nextPlus),
+    nextElite: readString(raw.nextElite),
+    updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : new Date(0).toISOString(),
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function readString(value: unknown) {
+  return typeof value === "string" ? value : "";
+}
+
+function normalizeGoalData(value: unknown): GoalData {
+  const source = isRecord(value) ? value : {};
+  return {
+    lifeArea: readString(source.lifeArea),
+    whyChange: readString(source.whyChange),
+    identityStatement: readString(source.identityStatement),
+  };
+}
+
+function normalizeOnboardingData(value: unknown): OnboardingData {
+  const source = isRecord(value) ? value : {};
+  return onboardingFieldOrder.reduce(
+    (next, field) => ({
+      ...next,
+      [field]: readString(source[field]),
+    }),
+    { ...emptyOnboarding },
+  );
+}
+
+function normalizeMessages(value: unknown): Message[] {
+  if (!Array.isArray(value)) return [];
+
+  return value.flatMap((item) => {
+    if (!isRecord(item) || (item.role !== "assistant" && item.role !== "user") || typeof item.text !== "string") {
+      return [];
+    }
+
+    const message: Message = {
+      role: item.role,
+      text: item.text,
+      ...(item.emphasizeFirstLine === true ? { emphasizeFirstLine: true } : {}),
+      ...(item.variant === "question" || item.variant === "system" || item.variant === "default"
+        ? { variant: item.variant }
+        : {}),
+    };
+
+    return [
+      message,
+    ];
+  });
+}
+
+function normalizeCheckInStatus(value: unknown): CheckInStatus | null {
+  return typeof value === "string" && value in statusMeta ? (value as CheckInStatus) : null;
+}
+
+function normalizeBlockerReason(value: unknown): BlockerReason | null {
+  return typeof value === "string" && blockerReasons.some((reason) => reason.value === value)
+    ? (value as BlockerReason)
+    : null;
+}
+
+function normalizeDailyPatternTurns(value: unknown): DailyPatternTurn[] {
+  if (!Array.isArray(value)) return [];
+
+  return value.flatMap((item) => {
+    if (!isRecord(item) || typeof item.user !== "string" || typeof item.assistant !== "string") return [];
+    return [{ user: item.user, assistant: item.assistant }];
+  });
+}
+
+function normalizeDailyStage(value: unknown): DailyStage {
+  const stages: DailyStage[] = ["checkin", "tomorrow_confirm", "pattern_chat", "goal_edit", "goal_patch_confirm", "done"];
+  return typeof value === "string" && stages.includes(value as DailyStage) ? (value as DailyStage) : "checkin";
+}
+
+function normalizeHabitTaskPatch(value: unknown): HabitTaskPatch | null {
+  if (!isRecord(value)) return null;
+  const patch: HabitTaskPatch = {};
+  if (typeof value.miniTask === "string" && value.miniTask.trim()) patch.miniTask = value.miniTask;
+  if (typeof value.plusTask === "string" && value.plusTask.trim()) patch.plusTask = value.plusTask;
+  if (typeof value.eliteTask === "string" && value.eliteTask.trim()) patch.eliteTask = value.eliteTask;
+  return Object.keys(patch).length ? patch : null;
+}
+
+function mergeOnboardingData(primary: OnboardingData, fallback: OnboardingData): OnboardingData {
+  return onboardingFieldOrder.reduce(
+    (next, field) => ({
+      ...next,
+      [field]: primary[field] || fallback[field],
+    }),
+    { ...fallback },
+  );
+}
+
+function dataToGoalData(data: OnboardingData): GoalData {
+  return {
+    lifeArea: data.lifeArea,
+    whyChange: data.whyChange,
+    identityStatement: data.goalIdentityStatement,
+  };
+}
+
+function mergeGoalData(primary: GoalData, fallback: GoalData): GoalData {
+  return {
+    lifeArea: primary.lifeArea || fallback.lifeArea,
+    whyChange: primary.whyChange || fallback.whyChange,
+    identityStatement: primary.identityStatement || fallback.identityStatement,
+  };
 }
 
 function mapProfileToData(profile: ElasticProfile): OnboardingData {
