@@ -730,6 +730,18 @@ blockquote {
   padding: 22px;
 }
 
+.mobile-context-toggle {
+  display: none;
+}
+
+.mobile-context-body {
+  display: contents;
+}
+
+.goal-update-flash {
+  display: none;
+}
+
 .tracker-header {
   align-items: start;
   display: flex;
@@ -2065,8 +2077,9 @@ blockquote {
   .tracker-workspace {
     grid-template-columns: 1fr;
     height: auto;
+    gap: 12px;
     overflow: visible;
-    padding-inline: 16px;
+    padding: 10px 16px 20px;
   }
 
   .goal-panel,
@@ -2076,8 +2089,133 @@ blockquote {
   }
 
   .chat-panel {
-    height: 520px;
+    height: min(620px, max(420px, calc(100dvh - 244px)));
+    order: -1;
     position: static;
+  }
+
+  .mobile-context-panel {
+    align-content: stretch;
+    gap: 0;
+    overflow: hidden;
+    padding: 0;
+  }
+
+  .tracker-panel.mobile-context-panel {
+    grid-template-rows: auto;
+  }
+
+  .mobile-context-toggle {
+    align-items: center;
+    background: rgba(255, 255, 255, 0.78);
+    border: 0;
+    color: var(--text);
+    cursor: pointer;
+    display: grid;
+    gap: 12px;
+    grid-template-columns: minmax(0, 1fr) auto;
+    min-height: 68px;
+    padding: 14px 16px;
+    text-align: left;
+    width: 100%;
+  }
+
+  .mobile-context-toggle > span {
+    display: grid;
+    gap: 3px;
+    min-width: 0;
+  }
+
+  .mobile-context-toggle strong {
+    font-size: 14px;
+    font-weight: 900;
+    line-height: 1.2;
+  }
+
+  .mobile-context-toggle small {
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 800;
+    line-height: 1.35;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mobile-context-chevron {
+    color: var(--primary);
+    transition: transform 0.16s ease;
+  }
+
+  .mobile-context-panel.mobile-open .mobile-context-chevron {
+    transform: rotate(180deg);
+  }
+
+  .goal-update-flash {
+    animation: goal-flash-in 0.18s ease-out;
+    background: rgba(255, 255, 255, 0.94);
+    border: 1px solid rgba(49, 91, 76, 0.22);
+    border-radius: 8px;
+    box-shadow: 0 18px 54px rgba(33, 41, 35, 0.24);
+    color: var(--text);
+    cursor: pointer;
+    display: grid;
+    gap: 7px;
+    left: 50%;
+    max-height: 42dvh;
+    overflow: hidden;
+    padding: 16px 18px;
+    position: fixed;
+    text-align: left;
+    top: 46%;
+    transform: translate(-50%, -50%);
+    width: min(320px, calc(100% - 48px));
+    z-index: 30;
+  }
+
+  .goal-update-flash.complete {
+    border-color: rgba(49, 91, 76, 0.38);
+    box-shadow: 0 22px 62px rgba(33, 41, 35, 0.3);
+  }
+
+  .goal-update-flash-title {
+    color: var(--primary);
+    font-size: 13px;
+    font-weight: 900;
+    line-height: 1.25;
+  }
+
+  .goal-update-flash-label {
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 850;
+    line-height: 1.25;
+  }
+
+  .goal-update-flash strong {
+    color: var(--text);
+    font-size: 17px;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+  }
+
+  .mobile-context-body {
+    display: none;
+  }
+
+  .mobile-context-panel.mobile-open .mobile-context-body {
+    display: grid;
+    gap: 16px;
+    padding: 16px;
+  }
+
+  .goal-panel.mobile-open .mobile-context-body {
+    gap: 18px;
+  }
+
+  .tracker-panel.mobile-open .mobile-context-body {
+    grid-template-rows: none;
   }
 
   .checkin-buttons,
@@ -2091,23 +2229,37 @@ blockquote {
   }
 }
 
+@keyframes goal-flash-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, calc(-50% + 10px)) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
 @media (max-width: 760px) {
   .app-frame {
-    padding: 0 0 88px;
+    padding: 0 0 calc(104px + env(safe-area-inset-bottom));
   }
 
   .side-nav {
-    bottom: 16px;
-    grid-template-columns: repeat(2, 1fr);
+    bottom: calc(12px + env(safe-area-inset-bottom));
+    gap: 6px;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     left: 50%;
     top: auto;
     transform: translateX(-50%);
-    width: min(260px, calc(100% - 32px));
+    width: min(330px, calc(100% - 32px));
   }
 
   .nav-item {
     flex-direction: row;
-    min-height: 44px;
+    font-size: 12px;
+    min-height: 46px;
   }
 }
 
@@ -2164,7 +2316,45 @@ blockquote {
     grid-template-columns: repeat(7, minmax(0, 1fr));
   }
 
-  .tracker-panel {
-    padding: 16px;
+  .chat-panel {
+    height: min(600px, max(400px, calc(100dvh - 244px)));
+    padding: 12px;
+  }
+
+  .chat-title {
+    padding-bottom: 12px;
+  }
+
+  .chat-title span {
+    max-width: 250px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .goal-panel-header h1 {
+    font-size: 30px;
+    line-height: 1.08;
+  }
+
+  .goal-panel-desc {
+    font-size: 14px;
+  }
+
+  .goal-field {
+    padding: 14px;
+  }
+
+  .goal-field-value {
+    font-size: 16px;
+  }
+
+  .habit-fields-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .tracker-panel.mobile-open .mobile-context-body,
+  .goal-panel.mobile-open .mobile-context-body {
+    padding: 14px;
   }
 }

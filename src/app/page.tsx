@@ -2,7 +2,7 @@
 
 import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowUp, CalendarCheck, Check, Circle, MessageCircle, Minus, PencilLine, Target } from "lucide-react";
+import { ArrowUp, CalendarCheck, Check, ChevronDown, Circle, MessageCircle, Minus, PencilLine, Target } from "lucide-react";
 import { AuthPanel } from "@/components/AuthPanel";
 import { LoadingState } from "@/components/LoadingState";
 import { todayKey } from "@/lib/date";
@@ -123,6 +123,14 @@ type DailyRecord = {
   status: CheckInStatus;
 };
 
+type GoalUpdateFlash = {
+  id: number;
+  title: string;
+  label: string;
+  value: string;
+  variant?: "default" | "complete";
+};
+
 type HomeSessionDraft = {
   version: 1;
   userId: string;
@@ -209,6 +217,41 @@ const blockerReasonLabel = Object.fromEntries(
   blockerReasons.map((reason) => [reason.value, reason.label]),
 ) as Record<BlockerReason, string>;
 
+const onboardingStepLabels: Record<OnboardingStep, string> = {
+  goal_area: "삶의 영역",
+  goal_why: "바꾸고 싶은 이유",
+  goal_identity: "정체성 문장",
+  failure_situation: "최근 실패 상황",
+  failure_feeling: "생각과 감정",
+  bridge: "습관 만들기 전환",
+  habit_action: "습관 행동",
+  habit_period: "기간",
+  habit_frequency: "빈도",
+  habit_when: "실행 시점",
+  habit_amount: "실행량",
+  goal_complete: "실행 계획 확인",
+  mini: "Mini 기준",
+  plus: "Plus 기준",
+  elite: "Elite 기준",
+  complete: "완료",
+};
+
+const onboardingFieldLabels: Record<keyof OnboardingData, string> = {
+  lifeArea: "삶의 영역",
+  whyChange: "바꾸고 싶은 이유",
+  goalIdentityStatement: "정체성 문장",
+  failureSituation: "최근 실패 상황",
+  failureFeeling: "그때 든 생각/감정",
+  habitAction: "습관 행동",
+  habitPeriod: "기간",
+  habitFrequency: "빈도",
+  habitWhen: "실행 시점",
+  habitAmount: "실행량",
+  miniTask: "Mini",
+  plusTask: "Plus",
+  eliteTask: "Elite",
+};
+
 const MINI_OPENING = (habitAction: string) => [
   "이제 목표를 Mini / Plus / Elite로 나눠볼게요.\n이건 잘함/못함을 평가하는 등급이 아니라, 그날의 컨디션에 맞춰 선택할 수 있는 실행 기준이에요.\nMini는 아주 힘든 날에도 남길 최소 증거, Plus는 보통 날의 기본 목표, Elite는 여유 있는 날의 확장 목표예요.",
   `예를 들어 매일 책 읽는 습관이라면 Mini는 책 1쪽 읽기, Plus는 책 10쪽 읽기, Elite는 책 30쪽 읽기처럼 잡을 수 있어요.\n이제 "${habitAction}"도 이렇게 나눠볼게요. 먼저 Mini는 어느 정도면 좋을까요?`,
@@ -276,9 +319,12 @@ export default function Home() {
   const [debugSessionId, setDebugSessionId] = useState(() => (debugEnabled ? readDebugSessionId() : ""));
   const [debugEvents, setDebugEvents] = useState<OnboardingDebugEvent[]>([]);
   const [goalExpanded, setGoalExpanded] = useState(false);
+  const [mobileContextOpen, setMobileContextOpen] = useState(false);
+  const [goalFlash, setGoalFlash] = useState<GoalUpdateFlash | null>(null);
   const [draftHydrationId, setDraftHydrationId] = useState(0);
   const chatLogRef = useRef<HTMLDivElement | null>(null);
   const loadedDraftIdentityRef = useRef<string | null>(null);
+  const goalFlashTimeoutRef = useRef<number | null>(null);
   const storageScope = debugEnabled ? `debug:${debugSessionId}` : LIVE_ELASTIC_SCOPE;
   const activeCheckInDate = debugEnabled ? debugCheckInDate : todayKey();
   const draftIdentity = userId ? `${userId}:${storageScope}:${activeCheckInDate}` : "";
@@ -312,6 +358,37 @@ export default function Home() {
     setNextElite(draft.nextElite || nextData.eliteTask);
     setPending(false);
     setSaveMessage(null);
+  }
+
+  function clearGoalFlash() {
+    if (goalFlashTimeoutRef.current) {
+      window.clearTimeout(goalFlashTimeoutRef.current);
+      goalFlashTimeoutRef.current = null;
+    }
+    setGoalFlash(null);
+  }
+
+  function showGoalFlash(flash: Omit<GoalUpdateFlash, "id">) {
+    const value = flash.value.trim();
+    if (!value) return;
+    if (goalFlashTimeoutRef.current) {
+      window.clearTimeout(goalFlashTimeoutRef.current);
+    }
+    setGoalFlash({ ...flash, value, id: Date.now() });
+    goalFlashTimeoutRef.current = window.setTimeout(() => {
+      setGoalFlash(null);
+      goalFlashTimeoutRef.current = null;
+    }, flash.variant === "complete" ? 2600 : 1800);
+  }
+
+  function showPatchFlash(patches: OnboardingControllerResult["data_patch"], nextData: OnboardingData) {
+    const flash = createPatchGoalFlash(patches, nextData);
+    if (flash) showGoalFlash(flash);
+  }
+
+  function openMobileContextFromFlash() {
+    setMobileContextOpen(true);
+    clearGoalFlash();
   }
 
   useEffect(() => {
@@ -412,6 +489,14 @@ export default function Home() {
       cancelled = true;
     };
   }, [activeCheckInDate, userId, storageScope]);
+
+  useEffect(() => {
+    return () => {
+      if (goalFlashTimeoutRef.current) {
+        window.clearTimeout(goalFlashTimeoutRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const chatLog = chatLogRef.current;
@@ -519,6 +604,7 @@ export default function Home() {
 
     const nextData = applyOnboardingPatch(currentData, result.data_patch);
     setData(nextData);
+    showPatchFlash(result.data_patch, nextData);
     assistant(result.reply);
 
     if (result.should_advance) {
@@ -541,6 +627,7 @@ export default function Home() {
     const nextData = applyOnboardingPatch(currentData, result.data_patch);
 
     setData(nextData);
+    showPatchFlash(result.data_patch, nextData);
     assistant(result.reply);
     setStep(result.next_step === "goal_complete" ? "goal_complete" : result.next_step);
     setGoalData({
@@ -557,6 +644,11 @@ export default function Home() {
     if (level === "mini") setNextMini(candidate);
     if (level === "plus") setNextPlus(candidate);
     if (level === "elite") setNextElite(candidate);
+    showGoalFlash({
+      title: "목표 카드 업데이트됨",
+      label: `${elasticLevelLabels[level]} 설정됨`,
+      value: candidate,
+    });
     assistant(createLevelEchoMessage(level, candidate));
   }
 
@@ -580,6 +672,16 @@ export default function Home() {
     setNextElite(nextData.eliteTask);
     await persistProfile(nextData);
     setMode("daily");
+    showGoalFlash({
+      title: "습관 목표가 완성됐어요",
+      label: "실행 기준",
+      value: buildSmartSentence(nextData) || formatTaskPatch({
+        miniTask: nextData.miniTask,
+        plusTask: nextData.plusTask,
+        eliteTask: nextData.eliteTask,
+      }),
+      variant: "complete",
+    });
     setMessages((current) => [
       ...current,
       { role: "assistant", text: `좋아요. Elite는 "${task}"로 확정할게요.` },
@@ -636,6 +738,7 @@ export default function Home() {
   async function applyOnboardingResult(result: OnboardingControllerResult, baseData = data) {
     const nextData = applyOnboardingPatch(baseData, result.data_patch);
     setData(nextData);
+    showPatchFlash(result.data_patch, nextData);
     assistant(result.reply);
 
     if (!result.should_advance) return;
@@ -648,6 +751,16 @@ export default function Home() {
       setNextElite(nextData.eliteTask);
       await persistProfile(nextData);
       setMode("daily");
+      showGoalFlash({
+        title: "습관 목표가 완성됐어요",
+        label: "실행 기준",
+        value: buildSmartSentence(nextData) || formatTaskPatch({
+          miniTask: nextData.miniTask,
+          plusTask: nextData.plusTask,
+          eliteTask: nextData.eliteTask,
+        }),
+        variant: "complete",
+      });
       setMessages((current) => [
         ...current,
         { role: "assistant", text: HABIT_SETUP_COMPLETE, emphasizeFirstLine: true, variant: "system" },
@@ -841,6 +954,16 @@ export default function Home() {
       setNextPlus(nextTasks.plus_task);
       setNextElite(nextTasks.elite_task);
       setPendingTaskPatch(null);
+      showGoalFlash({
+        title: "내일 목표가 저장됐어요",
+        label: "Mini / Plus / Elite",
+        value: formatTaskPatch({
+          miniTask: nextTasks.mini_task,
+          plusTask: nextTasks.plus_task,
+          eliteTask: nextTasks.elite_task,
+        }),
+        variant: "complete",
+      });
       const nextMessages: Message[] = [
         ...messages,
         { role: "user", text: "이대로 저장" },
@@ -1129,148 +1252,171 @@ export default function Home() {
   const trackerSubtitle = buildSmartSentence(data);
   const calendarMeta = getCalendarMeta(activeCheckInDate);
   const calendarCells = createCalendarCells(records, calendarMeta.firstWeekday);
+  const mobileContextTitle = isGoalPhase ? "목표 카드" : "습관 현황";
+  const mobileContextSubtitle = isGoalPhase
+    ? onboardingStepLabels[step]
+    : data.habitAction || "오늘 체크인";
+  const chatSubtitle = mode === "onboarding"
+    ? onboardingStepLabels[step]
+    : `${formatDateLabel(activeCheckInDate)} · ${statusMeta[selectedCheckIn || "open"].label}`;
 
   return (
     <main className="tracker-workspace">
       {isGoalPhase ? (
-        <GoalPanel data={data} goalData={goalData} step={step} />
+        <GoalPanel
+          data={data}
+          goalData={goalData}
+          mobileOpen={mobileContextOpen}
+          mobileSubtitle={mobileContextSubtitle}
+          mobileTitle={mobileContextTitle}
+          onToggleMobileOpen={() => setMobileContextOpen((current) => !current)}
+          step={step}
+        />
       ) : (
-      <section className="tracker-panel" aria-label="Elastic habit tracker">
-        <div className="tracker-header">
-          <div>
-            <p className="eyebrow">Elastic Habit Tracker</p>
-            <h1>{data.habitAction || "습관 설정 중"}</h1>
-            {trackerSubtitle ? <p className="tracker-subtitle">{trackerSubtitle}</p> : null}
-          </div>
-          <div className="tracker-score">
-            <strong>{completedCount}</strong>
-            <span>Plus/Elite 완료</span>
-          </div>
-        </div>
-
-        {(goalData.lifeArea || goalData.whyChange || goalData.identityStatement) && (
-          <section className="goal-summary-band">
-            <button
-              className="goal-summary-toggle"
-              onClick={() => setGoalExpanded((v) => !v)}
-              type="button"
-            >
-              <span>내 목표</span>
-              <span className="goal-summary-preview">
-                {goalExpanded ? "▲" : (goalData.identityStatement || goalData.lifeArea)}
-              </span>
-            </button>
-            {goalExpanded && (
-              <div className="goal-summary-body">
-                {goalData.lifeArea && (
-                  <div className="goal-summary-row">
-                    <span>삶의 영역</span>
-                    <p>{goalData.lifeArea}</p>
-                  </div>
-                )}
-                {goalData.whyChange && (
-                  <div className="goal-summary-row">
-                    <span>바꾸고 싶은 이유</span>
-                    <p>{goalData.whyChange}</p>
-                  </div>
-                )}
-                {goalData.identityStatement && (
-                  <div className="goal-summary-row goal-summary-identity">
-                    <span>정체성 문장</span>
-                    <p>"{goalData.identityStatement}"</p>
-                  </div>
-                )}
-              </div>
-            )}
-          </section>
-        )}
-
-        <section className="daily-overview" aria-label="오늘 체크인과 습관 기준">
-          <section className="today-strip">
+      <section className={`tracker-panel mobile-context-panel${mobileContextOpen ? " mobile-open" : ""}`} aria-label="Elastic habit tracker">
+        <MobileContextToggle
+          open={mobileContextOpen}
+          subtitle={mobileContextSubtitle}
+          title={mobileContextTitle}
+          onToggle={() => setMobileContextOpen((current) => !current)}
+        />
+        <div className="mobile-context-body">
+          <div className="tracker-header">
             <div>
-              <div className="band-title">
-                <CalendarCheck size={18} aria-hidden="true" />
-                <span>오늘 체크인</span>
-              </div>
-              <p>{selectedCheckIn ? createDailyNote(selectedCheckIn, memo) : "오늘의 선택과 패턴 대화를 남깁니다."}</p>
+              <p className="eyebrow">Elastic Habit Tracker</p>
+              <h1>{data.habitAction || "습관 설정 중"}</h1>
+              {trackerSubtitle ? <p className="tracker-subtitle">{trackerSubtitle}</p> : null}
             </div>
-            <span className={`tracker-status ${selectedCheckIn || "open"}`}>{statusMeta[selectedCheckIn || "open"].label}</span>
+            <div className="tracker-score">
+              <strong>{completedCount}</strong>
+              <span>Plus/Elite 완료</span>
+            </div>
+          </div>
+
+          {(goalData.lifeArea || goalData.whyChange || goalData.identityStatement) && (
+            <section className="goal-summary-band">
+              <button
+                className="goal-summary-toggle"
+                onClick={() => setGoalExpanded((v) => !v)}
+                type="button"
+              >
+                <span>내 목표</span>
+                <span className="goal-summary-preview">
+                  {goalExpanded ? "▲" : (goalData.identityStatement || goalData.lifeArea)}
+                </span>
+              </button>
+              {goalExpanded && (
+                <div className="goal-summary-body">
+                  {goalData.lifeArea && (
+                    <div className="goal-summary-row">
+                      <span>삶의 영역</span>
+                      <p>{goalData.lifeArea}</p>
+                    </div>
+                  )}
+                  {goalData.whyChange && (
+                    <div className="goal-summary-row">
+                      <span>바꾸고 싶은 이유</span>
+                      <p>{goalData.whyChange}</p>
+                    </div>
+                  )}
+                  {goalData.identityStatement && (
+                    <div className="goal-summary-row goal-summary-identity">
+                      <span>정체성 문장</span>
+                      <p>"{goalData.identityStatement}"</p>
+                    </div>
+                  )}
+                </div>
+              )}
+            </section>
+          )}
+
+          <section className="daily-overview" aria-label="오늘 체크인과 습관 기준">
+            <section className="today-strip">
+              <div>
+                <div className="band-title">
+                  <CalendarCheck size={18} aria-hidden="true" />
+                  <span>오늘 체크인</span>
+                </div>
+                <p>{selectedCheckIn ? createDailyNote(selectedCheckIn, memo) : "오늘의 선택과 패턴 대화를 남깁니다."}</p>
+              </div>
+              <span className={`tracker-status ${selectedCheckIn || "open"}`}>{statusMeta[selectedCheckIn || "open"].label}</span>
+            </section>
+
+            <div className="level-stack" aria-label="Mini Plus Elite 기준과 월간 횟수">
+              <section className="tracker-tile level-mini">
+                <div>
+                  <span>Mini</span>
+                  <strong>{data.miniTask || "최소 단위"}</strong>
+                </div>
+                <small>이번 달 {levelCounts.mini}회</small>
+              </section>
+              <section className="tracker-tile level-plus">
+                <div>
+                  <span>Plus</span>
+                  <strong>{data.plusTask || "보통 단위"}</strong>
+                </div>
+                <small>이번 달 {levelCounts.plus}회</small>
+              </section>
+              <section className="tracker-tile level-elite">
+                <div>
+                  <span>Elite</span>
+                  <strong>{data.eliteTask || "도전 단위"}</strong>
+                </div>
+                <small>이번 달 {levelCounts.elite}회</small>
+              </section>
+            </div>
           </section>
 
-          <div className="level-stack" aria-label="Mini Plus Elite 기준과 월간 횟수">
-            <section className="tracker-tile level-mini">
-              <div>
-                <span>Mini</span>
-                <strong>{data.miniTask || "최소 단위"}</strong>
-              </div>
-              <small>이번 달 {levelCounts.mini}회</small>
-            </section>
-            <section className="tracker-tile level-plus">
-              <div>
-                <span>Plus</span>
-                <strong>{data.plusTask || "보통 단위"}</strong>
-              </div>
-              <small>이번 달 {levelCounts.plus}회</small>
-            </section>
-            <section className="tracker-tile level-elite">
-              <div>
-                <span>Elite</span>
-                <strong>{data.eliteTask || "도전 단위"}</strong>
-              </div>
-              <small>이번 달 {levelCounts.elite}회</small>
-            </section>
-          </div>
-        </section>
+          <section className="calendar-board" aria-label={`${calendarMeta.koreanMonth} 기록 달력`}>
+            <div className="calendar-heading">
+              <strong>{calendarMeta.englishMonth}</strong>
+              <span>{calendarMeta.koreanMonth}</span>
+            </div>
+            <div className="calendar-weekdays" aria-hidden="true">
+              {KOREAN_WEEKDAYS.map((weekday) => (
+                <span key={weekday}>{weekday}</span>
+              ))}
+            </div>
+            <div className="month-grid">
+              {calendarCells.map((record, index) => {
+                if (!record) {
+                  return <div className="day-cell is-empty" key={`empty-${index}`} aria-hidden="true" />;
+                }
 
-        <section className="calendar-board" aria-label={`${calendarMeta.koreanMonth} 기록 달력`}>
-          <div className="calendar-heading">
-            <strong>{calendarMeta.englishMonth}</strong>
-            <span>{calendarMeta.koreanMonth}</span>
-          </div>
-          <div className="calendar-weekdays" aria-hidden="true">
-            {KOREAN_WEEKDAYS.map((weekday) => (
-              <span key={weekday}>{weekday}</span>
-            ))}
-          </div>
-          <div className="month-grid">
-            {calendarCells.map((record, index) => {
-              if (!record) {
-                return <div className="day-cell is-empty" key={`empty-${index}`} aria-hidden="true" />;
-              }
-
-              const Icon = statusMeta[record.status].icon;
-              const checkIn = checkIns.find((item) => item.checkin_date === record.dateKey) ?? null;
-              const isToday = record.dateKey === activeCheckInDate;
-              const showStatus = record.status !== "open";
-              return checkIn ? (
-                <Link
-                  aria-label={`${record.day}일 기록 ${statusMeta[record.status].label}`}
-                  className={`day-cell ${record.status}${isToday ? " is-today" : ""}`}
-                  href={`/record?date=${checkIn.checkin_date}&scope=${encodeURIComponent(storageScope)}`}
-                  key={record.dateKey}
-                >
-                  <span>{record.day}</span>
-                  {showStatus ? (
-                    <div className="day-status">
-                      <Icon size={17} aria-hidden="true" />
-                      <small>{statusMeta[record.status].label}</small>
-                    </div>
-                  ) : null}
-                </Link>
-              ) : (
-                <div className={`day-cell ${record.status}${isToday ? " is-today" : ""}`} key={record.dateKey}>
-                  <span>{record.day}</span>
-                  {showStatus ? (
-                    <div className="day-status">
-                      <Icon size={17} aria-hidden="true" />
-                      <small>{statusMeta[record.status].label}</small>
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })}
-          </div>
-        </section>
+                const Icon = statusMeta[record.status].icon;
+                const checkIn = checkIns.find((item) => item.checkin_date === record.dateKey) ?? null;
+                const isToday = record.dateKey === activeCheckInDate;
+                const showStatus = record.status !== "open";
+                return checkIn ? (
+                  <Link
+                    aria-label={`${record.day}일 기록 ${statusMeta[record.status].label}`}
+                    className={`day-cell ${record.status}${isToday ? " is-today" : ""}`}
+                    href={`/record?date=${checkIn.checkin_date}&scope=${encodeURIComponent(storageScope)}`}
+                    key={record.dateKey}
+                  >
+                    <span>{record.day}</span>
+                    {showStatus ? (
+                      <div className="day-status">
+                        <Icon size={17} aria-hidden="true" />
+                        <small>{statusMeta[record.status].label}</small>
+                      </div>
+                    ) : null}
+                  </Link>
+                ) : (
+                  <div className={`day-cell ${record.status}${isToday ? " is-today" : ""}`} key={record.dateKey}>
+                    <span>{record.day}</span>
+                    {showStatus ? (
+                      <div className="day-status">
+                        <Icon size={17} aria-hidden="true" />
+                        <small>{statusMeta[record.status].label}</small>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        </div>
       </section>
       )}
 
@@ -1279,7 +1425,7 @@ export default function Home() {
           <MessageCircle size={18} aria-hidden="true" />
           <div>
             <strong>{mode === "onboarding" ? "첫 목표 만들기" : "Daily Check-in"}</strong>
-            <span>{mode === "onboarding" ? "바꾸고 싶은 한 가지를 작은 습관으로 바꿔요" : "Supabase 저장 연결됨"}</span>
+            <span>{chatSubtitle}</span>
           </div>
         </div>
 
@@ -1366,6 +1512,19 @@ export default function Home() {
           </>
         )}
       </aside>
+      {goalFlash ? (
+        <button
+          aria-live="polite"
+          className={`goal-update-flash${goalFlash.variant === "complete" ? " complete" : ""}`}
+          key={goalFlash.id}
+          onClick={openMobileContextFromFlash}
+          type="button"
+        >
+          <span className="goal-update-flash-title">{goalFlash.title}</span>
+          <span className="goal-update-flash-label">{goalFlash.label}</span>
+          <strong>{goalFlash.value}</strong>
+        </button>
+      ) : null}
     </main>
   );
 }
@@ -2462,6 +2621,31 @@ function formatTaskPatch(patch: HabitTaskPatch) {
   return items.join("\n");
 }
 
+function createPatchGoalFlash(
+  patches: OnboardingControllerResult["data_patch"],
+  nextData: OnboardingData,
+): Omit<GoalUpdateFlash, "id"> | null {
+  const latestPatch = [...patches].reverse().find((patch) => patch.value.trim());
+  if (!latestPatch) return null;
+
+  const habitFields: (keyof OnboardingData)[] = [
+    "habitAction",
+    "habitPeriod",
+    "habitFrequency",
+    "habitWhen",
+    "habitAmount",
+  ];
+  const value = habitFields.includes(latestPatch.field)
+    ? buildSmartSentence(nextData) || latestPatch.value
+    : latestPatch.value;
+
+  return {
+    title: "목표 카드 업데이트됨",
+    label: habitFields.includes(latestPatch.field) ? "습관 계획" : onboardingFieldLabels[latestPatch.field],
+    value,
+  };
+}
+
 function normalizeHomeSessionDraft(raw: unknown, userId: string, scope: string): HomeSessionDraft | null {
   if (!isRecord(raw) || raw.version !== 1 || raw.userId !== userId || raw.scope !== scope) return null;
   const mode = raw.mode === "onboarding" || raw.mode === "daily" ? raw.mode : null;
@@ -2773,7 +2957,50 @@ function TypedField({ value, empty, isIdentity = false }: { value: string; empty
   return <>{displayed}{!done && <span className="goal-cursor">|</span>}</>;
 }
 
-function GoalPanel({ data, goalData, step }: { data: OnboardingData; goalData: GoalData; step: OnboardingStep }) {
+function MobileContextToggle({
+  onToggle,
+  open,
+  subtitle,
+  title,
+}: {
+  onToggle: () => void;
+  open: boolean;
+  subtitle: string;
+  title: string;
+}) {
+  return (
+    <button
+      aria-expanded={open}
+      className="mobile-context-toggle"
+      onClick={onToggle}
+      type="button"
+    >
+      <span>
+        <strong>{title}</strong>
+        <small>{subtitle}</small>
+      </span>
+      <ChevronDown className="mobile-context-chevron" size={18} aria-hidden="true" />
+    </button>
+  );
+}
+
+function GoalPanel({
+  data,
+  goalData,
+  mobileOpen,
+  mobileSubtitle,
+  mobileTitle,
+  onToggleMobileOpen,
+  step,
+}: {
+  data: OnboardingData;
+  goalData: GoalData;
+  mobileOpen: boolean;
+  mobileSubtitle: string;
+  mobileTitle: string;
+  onToggleMobileOpen: () => void;
+  step: OnboardingStep;
+}) {
   const goalFields: { label: string; value: string; active: boolean; isIdentity?: boolean }[] = [
     { label: "삶의 영역", value: goalData.lifeArea, active: step === "goal_area" },
     { label: "바꾸고 싶은 이유", value: goalData.whyChange, active: step === "goal_why" },
@@ -2797,64 +3024,72 @@ function GoalPanel({ data, goalData, step }: { data: OnboardingData; goalData: G
   const isHabitComplete = step === "goal_complete";
 
   return (
-    <section className="goal-panel" aria-label="목표 설정">
-      <div className="goal-panel-header">
-        <p className="eyebrow">목표 설정</p>
-        <h1>내 목표를 행동으로 바꾸기</h1>
-        <p className="goal-panel-desc">원하는 변화가 매일의 작은 행동으로 이어지도록 정리해요.</p>
-      </div>
+    <section className={`goal-panel mobile-context-panel${mobileOpen ? " mobile-open" : ""}`} aria-label="목표 설정">
+      <MobileContextToggle
+        open={mobileOpen}
+        subtitle={mobileSubtitle}
+        title={mobileTitle}
+        onToggle={onToggleMobileOpen}
+      />
+      <div className="mobile-context-body">
+        <div className="goal-panel-header">
+          <p className="eyebrow">목표 설정</p>
+          <h1>내 목표를 행동으로 바꾸기</h1>
+          <p className="goal-panel-desc">원하는 변화가 매일의 작은 행동으로 이어지도록 정리해요.</p>
+        </div>
 
-      <div className="goal-template">
-        <p className="goal-section-label">목표 &amp; 정체성</p>
-        {goalFields.map((field) => (
-          <div key={field.label} className={`goal-field${field.active ? " goal-field-active" : ""}${field.isIdentity ? " goal-field-identity" : ""}`}>
-            <span className="goal-field-label">{field.label}</span>
-            <p className="goal-field-value">
-              <TypedField
-                value={field.value}
-                isIdentity={field.isIdentity}
-                empty={<span className="goal-empty-line" />}
-              />
-            </p>
-          </div>
-        ))}
-      </div>
-
-      <div className="goal-template goal-pattern-template">
-        <p className="goal-section-label">나의 패턴</p>
-        {patternFields.map((field) => (
-          <div key={field.label} className={`goal-field${field.active ? " goal-field-active" : ""}`}>
-            <span className="goal-field-label">{field.label}</span>
-            <p className="goal-field-value">
-              <TypedField value={field.value} empty={<span className="goal-empty-line" />} />
-            </p>
-          </div>
-        ))}
-      </div>
-
-      <div className="goal-template goal-habit-template">
-        <p className="goal-section-label">습관 목표</p>
-        <div className="habit-fields-grid">
-          {habitFields.map((field) => (
-            <div key={field.label} className={`goal-field habit-field${field.active ? " goal-field-active" : ""}`}>
+        <div className="goal-template">
+          <p className="goal-section-label">목표 &amp; 정체성</p>
+          {goalFields.map((field) => (
+            <div key={field.label} className={`goal-field${field.active ? " goal-field-active" : ""}${field.isIdentity ? " goal-field-identity" : ""}`}>
               <span className="goal-field-label">{field.label}</span>
               <p className="goal-field-value">
                 <TypedField
                   value={field.value}
-                  empty={<span className="goal-placeholder">{field.placeholder}</span>}
+                  isIdentity={field.isIdentity}
+                  empty={<span className="goal-empty-line" />}
                 />
               </p>
             </div>
           ))}
         </div>
-        {(smartSentence || isHabitComplete) && (
-          <div className="smart-sentence">
-            <span className="goal-field-label">습관 목표 문장</span>
-            <p>
-              <TypedField value={smartSentence} empty="대화로 완성됩니다" isIdentity />
-            </p>
+
+        <div className="goal-template goal-pattern-template">
+          <p className="goal-section-label">나의 패턴</p>
+          {patternFields.map((field) => (
+            <div key={field.label} className={`goal-field${field.active ? " goal-field-active" : ""}`}>
+              <span className="goal-field-label">{field.label}</span>
+              <p className="goal-field-value">
+                <TypedField value={field.value} empty={<span className="goal-empty-line" />} />
+              </p>
+            </div>
+          ))}
+        </div>
+
+        <div className="goal-template goal-habit-template">
+          <p className="goal-section-label">습관 목표</p>
+          <div className="habit-fields-grid">
+            {habitFields.map((field) => (
+              <div key={field.label} className={`goal-field habit-field${field.active ? " goal-field-active" : ""}`}>
+                <span className="goal-field-label">{field.label}</span>
+                <p className="goal-field-value">
+                  <TypedField
+                    value={field.value}
+                    empty={<span className="goal-placeholder">{field.placeholder}</span>}
+                  />
+                </p>
+              </div>
+            ))}
           </div>
-        )}
+          {(smartSentence || isHabitComplete) && (
+            <div className="smart-sentence">
+              <span className="goal-field-label">습관 목표 문장</span>
+              <p>
+                <TypedField value={smartSentence} empty="대화로 완성됩니다" isIdentity />
+              </p>
+            </div>
+          )}
+        </div>
       </div>
     </section>
   );
