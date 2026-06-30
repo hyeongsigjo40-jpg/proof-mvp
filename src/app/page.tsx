@@ -1,8 +1,9 @@
 "use client";
 
-import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowUp, CalendarCheck, Check, ChevronDown, Circle, MessageCircle, Minus, PencilLine, Target } from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { ArrowUp, CalendarCheck, Check, ChevronDown, Circle, LogIn, MessageCircle, Minus, PencilLine, UserPlus } from "lucide-react";
 import { AuthPanel } from "@/components/AuthPanel";
 import { LoadingState } from "@/components/LoadingState";
 import { todayKey } from "@/lib/date";
@@ -63,6 +64,7 @@ type DailyPatternTurn = {
 type BlockerReason = "time" | "fatigue" | "emotion" | "prep" | "environment" | "too_big" | "other";
 type DailyStage = "checkin" | "tomorrow_confirm" | "pattern_chat" | "goal_edit" | "goal_patch_confirm" | "done";
 type HabitTaskPatch = Partial<Record<`${ElasticLevel}Task`, string>>;
+type MobileWorkspaceTab = "chat" | "context";
 
 type OnboardingData = {
   lifeArea: string;
@@ -259,6 +261,7 @@ const MINI_OPENING = (habitAction: string) => [
 
 const initialMessages: Message[] = [];
 const DEBUG_SESSION_KEY = "proof-elastic-debug-session";
+const ENTRY_AUTH_PROMPT_KEY = "proof-entry-auth-prompt-dismissed";
 const KOREAN_WEEKDAYS = ["일요일", "월요일", "화요일", "수요일", "목요일", "금요일", "토요일"];
 const CHAT_LOG_START = "[채팅 로그 JSON]";
 const CHAT_LOG_END = "[/채팅 로그 JSON]";
@@ -291,6 +294,16 @@ function addDaysToDateKey(dateKey: string, days: number) {
 }
 
 export default function Home() {
+  return (
+    <Suspense fallback={<LoadingState />}>
+      <HomeContent />
+    </Suspense>
+  );
+}
+
+function HomeContent() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const { loading, userId } = useProofSession();
   const [mode, setMode] = useState<"onboarding" | "daily">("onboarding");
   const [step, setStep] = useState<OnboardingStep>("goal_area");
@@ -320,14 +333,23 @@ export default function Home() {
   const [debugEvents, setDebugEvents] = useState<OnboardingDebugEvent[]>([]);
   const [goalExpanded, setGoalExpanded] = useState(false);
   const [mobileContextOpen, setMobileContextOpen] = useState(false);
+  const [activeMobileTab, setActiveMobileTab] = useState<MobileWorkspaceTab>("chat");
   const [goalFlash, setGoalFlash] = useState<GoalUpdateFlash | null>(null);
   const [draftHydrationId, setDraftHydrationId] = useState(0);
+  const [entryAuthPromptDismissed, setEntryAuthPromptDismissed] = useState(
+    () => typeof window !== "undefined" && window.sessionStorage.getItem(ENTRY_AUTH_PROMPT_KEY) === "1",
+  );
   const chatLogRef = useRef<HTMLDivElement | null>(null);
   const loadedDraftIdentityRef = useRef<string | null>(null);
   const goalFlashTimeoutRef = useRef<number | null>(null);
   const storageScope = debugEnabled ? `debug:${debugSessionId}` : LIVE_ELASTIC_SCOPE;
   const activeCheckInDate = debugEnabled ? debugCheckInDate : todayKey();
   const draftIdentity = userId ? `${userId}:${storageScope}:${activeCheckInDate}` : "";
+  const mobileView = searchParams.get("view");
+
+  useEffect(() => {
+    setActiveMobileTab(mobileView === "goal" ? "context" : "chat");
+  }, [mobileView]);
 
   function markDraftHydrated() {
     loadedDraftIdentityRef.current = draftIdentity;
@@ -387,8 +409,35 @@ export default function Home() {
   }
 
   function openMobileContextFromFlash() {
+    const params = new URLSearchParams();
+    params.set("view", "goal");
+    if (debugEnabled) {
+      params.set("debug", "1");
+      params.set("scope", storageScope);
+    }
+    router.push(`/?${params.toString()}`);
+    setActiveMobileTab("context");
     setMobileContextOpen(true);
     clearGoalFlash();
+  }
+
+  function dismissEntryAuthPrompt() {
+    window.sessionStorage.setItem(ENTRY_AUTH_PROMPT_KEY, "1");
+    setEntryAuthPromptDismissed(true);
+  }
+
+  function moveToAuthPanel() {
+    dismissEntryAuthPrompt();
+    requestAnimationFrame(() => {
+      const emailInput = document.getElementById("email");
+      emailInput?.scrollIntoView({ behavior: "smooth", block: "center" });
+      emailInput?.focus({ preventScroll: true });
+    });
+  }
+
+  function moveToSignup() {
+    dismissEntryAuthPrompt();
+    router.push("/signup");
   }
 
   useEffect(() => {
@@ -1259,9 +1308,11 @@ export default function Home() {
   const chatSubtitle = mode === "onboarding"
     ? onboardingStepLabels[step]
     : `${formatDateLabel(activeCheckInDate)} · ${statusMeta[selectedCheckIn || "open"].label}`;
+  const showEntryAuthPrompt = !userId && !entryAuthPromptDismissed;
 
   return (
-    <main className="tracker-workspace">
+    <>
+    <main className={`tracker-workspace mobile-tab-${activeMobileTab}`}>
       {isGoalPhase ? (
         <GoalPanel
           data={data}
@@ -1525,7 +1576,70 @@ export default function Home() {
           <strong>{goalFlash.value}</strong>
         </button>
       ) : null}
+      {showEntryAuthPrompt ? (
+        <EntryAuthPrompt
+          onContinue={dismissEntryAuthPrompt}
+          onLogin={moveToAuthPanel}
+          onSignup={moveToSignup}
+        />
+      ) : null}
     </main>
+    </>
+  );
+}
+
+function EntryAuthPrompt({
+  onContinue,
+  onLogin,
+  onSignup,
+}: {
+  onContinue: () => void;
+  onLogin: () => void;
+  onSignup: () => void;
+}) {
+  const dialogRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    requestAnimationFrame(() => dialogRef.current?.focus({ preventScroll: true }));
+  }, []);
+
+  function handleKeyDown(event: KeyboardEvent<HTMLElement>) {
+    if (event.key === "Escape") {
+      onContinue();
+    }
+  }
+
+  return (
+    <div className="entry-auth-backdrop" role="presentation">
+      <section
+        aria-labelledby="entry-auth-title"
+        aria-modal="true"
+        className="entry-auth-dialog"
+        onKeyDown={handleKeyDown}
+        ref={dialogRef}
+        role="dialog"
+        tabIndex={-1}
+      >
+        <div className="entry-auth-copy">
+          <p className="entry-auth-eyebrow">Proof</p>
+          <h2 id="entry-auth-title">다시 오신 걸 환영합니다</h2>
+          <p>로그인하면 목표 설정과 체크인 기록을 이어서 관리할 수 있어요.</p>
+        </div>
+        <div className="entry-auth-actions">
+          <button className="entry-auth-primary" onClick={onLogin} type="button">
+            <LogIn size={17} aria-hidden="true" />
+            로그인
+          </button>
+          <button className="entry-auth-secondary" onClick={onSignup} type="button">
+            <UserPlus size={17} aria-hidden="true" />
+            무료로 회원가입
+          </button>
+          <button className="entry-auth-continue" onClick={onContinue} type="button">
+            로그인하지 않고 계속
+          </button>
+        </div>
+      </section>
+    </div>
   );
 }
 
